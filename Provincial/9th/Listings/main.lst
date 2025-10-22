@@ -1,0 +1,328 @@
+C51 COMPILER V9.59.0.0   MAIN                                                              04/06/2024 16:31:45 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: E:\keil5\C51\BIN\C51.EXE main.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\main.l
+                    -st) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <STC15F2K60S2.H>
+   2          #include "intrins.h"
+   3          #include "iic.h"
+   4          sbit US_TX=P1^0;
+   5          sbit US_RX=P1^1;
+   6          code unsigned char Seg_Wale[] ={0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80};
+   7          code unsigned char Seg_Table[] =
+   8          {
+   9          0xc0,//0
+  10          0xf9,//1
+  11          0xa4,//2
+  12          0xb0,//3
+  13          0x99,//4
+  14          0x92,//5
+  15          0x82,//6
+  16          0xf8,//7
+  17          0x80,//8
+  18          0x90,//9
+  19          0xff,//10
+  20          0xc6,//C 11
+  21          0x8e,//F 12
+  22          0x88,//A
+  23          0x83,//b
+  24          0xa1,//d
+  25          0x8,//E
+  26          };
+  27          unsigned char seg_bus[]={10,10,10,10,10,10,10,10};
+  28          unsigned char point_bus[]={0,0,0,0,0,0,0,0};
+  29          unsigned char led_bus[]={0,0,0,0,0,0,0,0};
+  30          unsigned char found_index;
+  31          unsigned char seg_slow_down,key_slow_down;
+  32          unsigned char key_val,key_old,key_down,key_up;
+  33          unsigned char Distance_Found;
+  34          unsigned char Distance_Save[4]={0,0,0,0};
+  35          unsigned int blink_num,Timer_1000;
+  36          bit found_over_flag=0;
+  37          
+  38          unsigned char V_out;
+  39          unsigned char Found_Num=0;
+  40          unsigned char Mod2_num,Mod3_set;
+  41          unsigned char seg_show_mod=0; //0-测距 1-回显 2-参数
+  42          unsigned char Distance_Set=20;
+  43          
+  44          void Delay20us(void)    //@12.000MHz
+  45          {
+  46   1              unsigned char data i;
+  47   1      
+  48   1              _nop_();
+  49   1              _nop_();
+  50   1              i = 57;
+  51   1              while (--i);
+  52   1      }
+  53          void Timer0_Init(void)          //1毫秒@12.000MHz
+  54          {
+C51 COMPILER V9.59.0.0   MAIN                                                              04/06/2024 16:31:45 PAGE 2   
+
+  55   1              AUXR &= 0x7F;                   //定时器时钟12T模式
+  56   1              TMOD &= 0xF0;                   //设置定时器模式
+  57   1              TL0 = 0x18;                             //设置定时初始值
+  58   1              TH0 = 0xFC;                             //设置定时初始值
+  59   1              TF0 = 0;                                //清除TF0标志
+  60   1              TR0 = 1;                                //定时器0开始计时
+  61   1              ET0 = 1;
+  62   1              EA = 1;
+  63   1      }
+  64          void system_init()
+  65          {
+  66   1              P2 = P2 & 0x1f | 0x80;
+  67   1              P0 = 0xff;
+  68   1              P2 = P2 & 0x1f | 0xa0;
+  69   1              P0 = 0x00;
+  70   1              P2 = P2 & 0x1f;
+  71   1      }
+  72          void seg(unsigned char wale,valu,point)
+  73          {
+  74   1              P2 = P2 & 0x1f | 0xc0;
+  75   1              P0 = Seg_Wale[wale];
+  76   1              P2 = P2 & 0x1f | 0xe0;
+  77   1              P0 = Seg_Table[10];
+  78   1              P2 = P2 & 0x1f | 0xc0;
+  79   1              P0 = Seg_Wale[wale];
+  80   1              P2 = P2 & 0x1f | 0xe0;
+  81   1              P0 = Seg_Table[10];
+  82   1              if(point) P0&= 0x7f;
+  83   1              P0&= Seg_Table[valu];
+  84   1              P2 = P2 & 0x1f;
+  85   1      }
+  86          unsigned char key_read()
+  87          {
+  88   1              unsigned char temp=0;
+  89   1              if(P33==0) temp=4;
+  90   1              if(P32==0) temp=5;
+  91   1              if(P31==0) temp=6;
+  92   1              if(P30==0) temp=7;
+  93   1              return temp;
+  94   1      }
+  95          void led(unsigned char addr,enable)
+  96          {
+  97   1              unsigned char temp=0x00,temp_old=0xff;
+  98   1              if(enable)
+  99   1                      temp|=0x01<<addr;
+ 100   1              else
+ 101   1                      temp&=~(0x01<<addr);
+ 102   1              if(temp_old!=temp)
+ 103   1              {
+ 104   2                      P2 = P2 & 0x1f | 0x80;
+ 105   2                      P0 =~temp;
+ 106   2                      P2 = P2 & 0x1f;
+ 107   2                      temp_old=temp;
+ 108   2              }
+ 109   1      }
+ 110          void Ultrasonic_Wave()
+ 111          {
+ 112   1              unsigned char i;
+ 113   1              for(i=0;i<8;i++)
+ 114   1              {
+ 115   2                      US_TX=1;
+ 116   2                      Delay20us();
+C51 COMPILER V9.59.0.0   MAIN                                                              04/06/2024 16:31:45 PAGE 3   
+
+ 117   2                      US_TX=0;
+ 118   2                      Delay20us();
+ 119   2              }
+ 120   1      }
+ 121          unsigned char Us_Found()
+ 122          {
+ 123   1              TMOD &= 0x0f;
+ 124   1              TH1=TL1=0;
+ 125   1              Ultrasonic_Wave();
+ 126   1              TR1=1;
+ 127   1              while((US_RX==1)&&(TF1==0));
+ 128   1              TR1=0;
+ 129   1              if(TF1==1)
+ 130   1              {
+ 131   2                      TF1=0;
+ 132   2                      return 0;
+ 133   2              }
+ 134   1              else
+ 135   1              {
+ 136   2                      return ((TH1<<8)|TL1)*0.017;
+ 137   2              }
+ 138   1      }
+ 139          void Us_Text_One()
+ 140          {
+ 141   1              Distance_Found=0;
+ 142   1              Distance_Found=Us_Found();
+ 143   1              Distance_Save[Found_Num]=Distance_Found;
+ 144   1              Found_Num++;
+ 145   1              if(Found_Num==4) Found_Num=0;
+ 146   1              eeprom_write(Distance_Save,1,4);
+ 147   1              found_over_flag=1;
+ 148   1              blink_num=0;
+ 149   1      }
+ 150          void DA_conversion()
+ 151          {
+ 152   1              if(Distance_Found<=Distance_Set)
+ 153   1              {
+ 154   2                      DA_Write(0);
+ 155   2              }
+ 156   1              else
+ 157   1              {
+ 158   2                      DA_Write((int)(Distance_Found-Distance_Set));
+ 159   2              }
+ 160   1      }
+ 161          void led_proc()
+ 162          {
+ 163   1              unsigned char i;
+ 164   1              for(i=1;i<8;i++) led_bus[i]=0;
+ 165   1              if(seg_show_mod==2) led_bus[6]=1;
+ 166   1              if(seg_show_mod==1) led_bus[7]=1;
+ 167   1      }
+ 168          void key_proc()
+ 169          {
+ 170   1              if(key_slow_down) return;
+ 171   1              key_slow_down=1;
+ 172   1              
+ 173   1              key_val=key_read();
+ 174   1              key_down=key_val&(key_val^key_old);
+ 175   1              key_up=~key_val&(key_val^key_old);
+ 176   1              key_old=key_val;
+ 177   1              switch(key_down)
+ 178   1              {
+C51 COMPILER V9.59.0.0   MAIN                                                              04/06/2024 16:31:45 PAGE 4   
+
+ 179   2                      case 4:
+ 180   2                              if(seg_show_mod==0) Us_Text_One();
+ 181   2                      break;
+ 182   2                      case 5:
+ 183   2                              if(seg_show_mod!=1) seg_show_mod=1;
+ 184   2                              else if(seg_show_mod==1) seg_show_mod=0;
+ 185   2                      break;
+ 186   2                      case 6:
+ 187   2                              if(seg_show_mod!=2) 
+ 188   2                              {
+ 189   3                                      Mod3_set=Distance_Set;
+ 190   3                                      seg_show_mod=2;
+ 191   3                              }
+ 192   2                              else if(seg_show_mod==2) 
+ 193   2                              {
+ 194   3                                      Distance_Set=Mod3_set;
+ 195   3                                      eeprom_write(&Distance_Set,20,1);
+ 196   3                                      seg_show_mod=0;
+ 197   3                              }
+ 198   2                      break;
+ 199   2                      case 7:
+ 200   2                              if(seg_show_mod==1) Mod2_num++;
+ 201   2                              if(seg_show_mod==2) Mod3_set+=10;
+ 202   2                              if(Mod2_num==4) Mod2_num=0;
+ 203   2                              if(Mod3_set==40) Mod3_set=0;
+ 204   2                      break;
+ 205   2              }
+ 206   1              
+ 207   1      }
+ 208          void seg_proc()
+ 209          {
+ 210   1              unsigned char i;
+ 211   1              if(seg_slow_down) return;
+ 212   1              seg_slow_down=1;
+ 213   1              for(i=0;i<8;i++)
+ 214   1              {
+ 215   2                      seg_bus[i]=10;
+ 216   2                      point_bus[i]=0;
+ 217   2              }
+ 218   1              switch(seg_show_mod)
+ 219   1              {
+ 220   2                      case 0://测距
+ 221   2                              seg_bus[0]=11;
+ 222   2                              
+ 223   2                              seg_bus[2]=(int)Distance_Found/100%10;
+ 224   2                              seg_bus[3]=(int)Distance_Found/10%10;
+ 225   2                              seg_bus[4]=(int)Distance_Found%10;
+ 226   2                              if(Found_Num>1)
+ 227   2                              {
+ 228   3                              seg_bus[5]=(int)Distance_Save[Found_Num-2]/100%10;
+ 229   3                              seg_bus[6]=(int)Distance_Save[Found_Num-2]/10%10;
+ 230   3                              seg_bus[7]=(int)Distance_Save[Found_Num-2]%10;
+ 231   3                              }
+ 232   2                              else
+ 233   2                              {
+ 234   3                              seg_bus[5]=(int)Distance_Save[(3*Found_Num+4)/2]/100%10;
+ 235   3                              seg_bus[6]=(int)Distance_Save[(3*Found_Num+4)/2]/10%10;
+ 236   3                              seg_bus[7]=(int)Distance_Save[(3*Found_Num+4)/2]%10;
+ 237   3                              }
+ 238   2                      break;
+ 239   2                      case 1://回显 Distance_Save[Mod2_num] 
+ 240   2                              seg_bus[0]=2;
+C51 COMPILER V9.59.0.0   MAIN                                                              04/06/2024 16:31:45 PAGE 5   
+
+ 241   2                      
+ 242   2                              seg_bus[5]=(int)Distance_Save[Mod2_num]/100%10;
+ 243   2                              seg_bus[6]=(int)Distance_Save[Mod2_num]/10%10;
+ 244   2                              seg_bus[7]=(int)Distance_Save[Mod2_num]%10;
+ 245   2                      break;
+ 246   2                      case 2://参数 Mod3_set
+ 247   2                              seg_bus[0]=12;
+ 248   2                              seg_bus[6]=(int)Mod3_set/10%10;
+ 249   2                              seg_bus[7]=(int)Mod3_set%10;
+ 250   2                      break;
+ 251   2              }
+ 252   1      }
+ 253          void T0_R(void) interrupt 1
+ 254          {
+ 255   1              if(++seg_slow_down==50) seg_slow_down=0;
+ 256   1              if(++key_slow_down==90) key_slow_down=0;
+ 257   1              if(++found_index==8) found_index=0;
+ 258   1              led(found_index,led_bus[found_index]);
+ 259   1              seg(found_index,seg_bus[found_index],point_bus[found_index]);
+ 260   1              seg_proc();
+ 261   1              key_proc();
+ 262   1              led_proc();
+ 263   1              if(found_over_flag==1)
+ 264   1              {
+ 265   2                      if(blink_num!=6)
+ 266   2                      {
+ 267   3                              if(++Timer_1000==1000)
+ 268   3                              {
+ 269   4                                      Timer_1000=0;
+ 270   4                                      led_bus[0]^=1;
+ 271   4                                      blink_num++;
+ 272   4                              }
+ 273   3                      }
+ 274   2                      else
+ 275   2                      {
+ 276   3                              led_bus[0]=0;
+ 277   3                              found_over_flag=0;
+ 278   3                              blink_num=0;
+ 279   3                      }
+ 280   2              }
+ 281   1      }
+ 282          void main()
+ 283          {
+ 284   1              Timer0_Init();
+ 285   1              system_init();
+ 286   1              eeprom_read(Distance_Save,1,4);
+ 287   1              eeprom_read(&Distance_Set,20,1);
+ 288   1      //      eeprom_write(Distance_Save,1,4);
+ 289   1      //      eeprom_write(&Distance_Set,20,1);
+ 290   1              while(1)
+ 291   1              {
+ 292   2                      DA_conversion();
+ 293   2              }
+ 294   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1155    ----
+   CONSTANT SIZE    =     25    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     46    ----
+C51 COMPILER V9.59.0.0   MAIN                                                              04/06/2024 16:31:45 PAGE 6   
+
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      1    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

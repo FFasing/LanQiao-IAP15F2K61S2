@@ -1,0 +1,255 @@
+C51 COMPILER V9.59.0.0   MAIN                                                              04/04/2024 16:08:33 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: E:\keil5\C51\BIN\C51.EXE main.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\main.l
+                    -st) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <STC15F2K60S2.H>
+   2          #include <onewire.h>
+   3          #include <iic.h>
+   4          
+   5          sbit ROW1 = P3^0;
+   6          sbit ROW2 = P3^1;
+   7          sbit ROW3 = P3^2;
+   8          sbit ROW4 = P3^3;
+   9          sbit COL1 = P4^4;
+  10          sbit COL2 = P4^2;
+  11          sbit COL3 = P3^5;
+  12          sbit COL4 = P3^4;
+  13          
+  14          code unsigned char Seg_Table[] =
+  15          {
+  16          0xc0,//0
+  17          0xf9,//1
+  18          0xa4,//2
+  19          0xb0,//3
+  20          0x99,//4
+  21          0x92,//5
+  22          0x82,//6
+  23          0xf8,//7
+  24          0x80,//8
+  25          0x90,//9
+  26          0xff,//10
+  27          0xc6,//C 11
+  28          0x8c,//P 12     
+  29          0x88,//A 13
+  30          0x83,//b
+  31          
+  32          0xa1,//d
+  33          0x86,//E
+  34          0x8e//F
+  35          };
+  36          code unsigned char Seg_Wale[] ={0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80};
+  37          unsigned char seg_bus[]={10,10,10,10,10,10,10,10};
+  38          unsigned char point_bus[]={0,0,0,0,0,0,0,0};
+  39          unsigned char led_bus[]={0,0,0,0,0,0,0,0};
+  40          unsigned char seg_slow_down,key_slow_down;
+  41          unsigned char Index;
+  42          unsigned char key_val,key_old,key_down,key_up;
+  43          float Temperature,V_show_out;
+  44          unsigned char V_out;
+  45          float T_show;
+  46          unsigned char Timerature_Key_Set;
+  47          
+  48          unsigned char seg_show_mod=0;   //0-温度 1-参数 2-DAC
+  49          unsigned char Timerature_Set=25;
+  50          bit word_mod=0; //0-模式1 1-模式2
+  51          
+  52          void Timer0Init(void)           //1毫秒@12.000MHz
+  53          {
+  54   1              AUXR &= 0x7F;           //定时器时钟12T模式
+C51 COMPILER V9.59.0.0   MAIN                                                              04/04/2024 16:08:33 PAGE 2   
+
+  55   1              TMOD &= 0xF0;           //设置定时器模式
+  56   1              TL0 = 0x18;             //设置定时初值
+  57   1              TH0 = 0xFC;             //设置定时初值
+  58   1              TF0 = 0;                //清除TF0标志
+  59   1              TR0 = 1;                //定时器0开始计时
+  60   1              ET0 = 1;
+  61   1              EA  = 1;
+  62   1      }
+  63          void system_init()
+  64          {
+  65   1              P2=P2&0x1f| 0x80;
+  66   1              P0=0xff;
+  67   1              P2=P2&0x1f| 0xa0;
+  68   1              P0=0x00;
+  69   1              P2=P2&0x1f;
+  70   1      }
+  71          void seg(unsigned char wale,valu,point)
+  72          {
+  73   1              P2=P2&0x1f| 0xc0;
+  74   1              P0=Seg_Wale[wale];
+  75   1              P2=P2&0x1f| 0xe0;
+  76   1              P0=Seg_Table[10];
+  77   1              P2=P2&0x1f| 0xc0;
+  78   1              P0=Seg_Wale[wale];
+  79   1              P2=P2&0x1f| 0xe0;
+  80   1              P0=Seg_Table[10];
+  81   1              if(point) P0&=0x7f;
+  82   1              P0&=Seg_Table[valu];
+  83   1              P2=P2&0x1f;
+  84   1      }
+  85          unsigned char key_read()
+  86          {
+  87   1              unsigned char temp=0;
+  88   1              ROW1=ROW2=ROW3=ROW4=1;
+  89   1              COL1=0;COL2=COL3=COL4=1;
+  90   1              if(ROW4==0) temp=4;
+  91   1              if(ROW3==0) temp=5;
+  92   1              ROW1=ROW2=ROW3=ROW4=1;
+  93   1              COL2=0;COL1=COL3=COL4=1;
+  94   1              if(ROW4==0) temp=8;
+  95   1              if(ROW3==0) temp=9;
+  96   1              return temp;
+  97   1      }
+  98          void led(unsigned char addr,enable)
+  99          {
+ 100   1              unsigned char val=0x00,old=0xff;
+ 101   1              if(enable)
+ 102   1                      val|=0x01<<addr;
+ 103   1              else
+ 104   1                      val&=~(0x01<<addr);
+ 105   1              if(old!=val)
+ 106   1              {
+ 107   2                      P2=P2&0x1f| 0x80;
+ 108   2                      P0=~val;
+ 109   2                      P2=P2&0x1f;
+ 110   2                      old=val;
+ 111   2              }
+ 112   1      }
+ 113          void key_proc()
+ 114          {
+ 115   1              if(key_slow_down) return;
+ 116   1              key_slow_down=1;
+C51 COMPILER V9.59.0.0   MAIN                                                              04/04/2024 16:08:33 PAGE 3   
+
+ 117   1              
+ 118   1              key_val=key_read();
+ 119   1              key_down=key_val&(key_val^key_old);
+ 120   1              key_up=~key_val&(key_val^key_old);
+ 121   1              key_old=key_val;
+ 122   1              
+ 123   1              switch(key_down)
+ 124   1              {
+ 125   2                      case 4:
+ 126   2                              seg_show_mod++;
+ 127   2                              if(seg_show_mod==3) seg_show_mod=0;
+ 128   2                              if(seg_show_mod==1)     Timerature_Key_Set=Timerature_Set;
+ 129   2                              if(seg_show_mod!=1) Timerature_Set=Timerature_Key_Set;
+ 130   2                      break;
+ 131   2                      case 5:
+ 132   2                              word_mod^=1;
+ 133   2                      break;
+ 134   2                      case 8:
+ 135   2                              if(seg_show_mod==1) Timerature_Key_Set--;
+ 136   2                      break;
+ 137   2                      case 9:
+ 138   2                              if(seg_show_mod==1) Timerature_Key_Set++;
+ 139   2                      break;
+ 140   2              }
+ 141   1      }
+ 142          void seg_proc()
+ 143          {
+ 144   1              unsigned char i;
+ 145   1              if(seg_slow_down) return;
+ 146   1              seg_slow_down=1;
+ 147   1              for(i=0;i<8;i++) {seg_bus[i]=10;point_bus[i]=0;}
+ 148   1              T_show=Temperature;
+ 149   1              switch(seg_show_mod)
+ 150   1              {
+ 151   2                      case 0://温度 Temperature
+ 152   2                              
+ 153   2                              seg_bus[0]=11;
+ 154   2                              seg_bus[4]=(int)T_show/10;
+ 155   2                              seg_bus[5]=(int)T_show%10;
+ 156   2                              point_bus[5]=1;
+ 157   2                              seg_bus[6]=(int)(T_show*10)%10;
+ 158   2                              seg_bus[7]=(int)(T_show*100)%10;
+ 159   2                      break;
+ 160   2                      case 1://参数 Timerature_Set
+ 161   2                              seg_bus[0]=12;
+ 162   2                      
+ 163   2                              seg_bus[6]=(int)Timerature_Key_Set/10;
+ 164   2                              seg_bus[7]=(int)Timerature_Key_Set%10;
+ 165   2                      break;
+ 166   2                      case 2://DAC V_show_out 
+ 167   2                              seg_bus[0]=13;
+ 168   2                      
+ 169   2                              seg_bus[4]=(int)V_show_out/10;
+ 170   2                              seg_bus[5]=(int)V_show_out%10;
+ 171   2                              point_bus[5]=1;
+ 172   2                              seg_bus[6]=(int)(V_show_out*10)%10;
+ 173   2                              seg_bus[7]=(int)(V_show_out*100)%10;
+ 174   2                      break;
+ 175   2              }
+ 176   1      }
+ 177          void led_proc()
+ 178          {
+C51 COMPILER V9.59.0.0   MAIN                                                              04/04/2024 16:08:33 PAGE 4   
+
+ 179   1              unsigned char i;
+ 180   1              for(i=0;i<8;i++) led_bus[i]=0;
+ 181   1              if(word_mod==0) led_bus[0]=1;
+ 182   1              if(seg_show_mod==0) led_bus[1]=1;
+ 183   1              if(seg_show_mod==1) led_bus[2]=1;
+ 184   1              if(seg_show_mod==2) led_bus[3]=1;
+ 185   1      }
+ 186          void T0_R(void) interrupt 1
+ 187          {
+ 188   1              if(++seg_slow_down==50) seg_slow_down=0;
+ 189   1              if(++key_slow_down==100) key_slow_down=0;
+ 190   1              if(++Index==8) Index=0;
+ 191   1              seg(Index,seg_bus[Index],point_bus[Index]);
+ 192   1              led(Index,led_bus[Index]);
+ 193   1              seg_proc();
+ 194   1              key_proc();
+ 195   1              led_proc();
+ 196   1      }
+ 197          void main()
+ 198          {
+ 199   1              Timer0Init();
+ 200   1              system_init();
+ 201   1              while(1)
+ 202   1              {
+ 203   2                      Temperature=T_read();
+ 204   2                      if(word_mod==1)
+ 205   2                      {
+ 206   3                              V_show_out=(Temperature*3.0)/20.0-2;
+ 207   3                              if(V_show_out<=1.0) {V_out=255/5;V_show_out=1.0;}
+ 208   3                              if(V_show_out>=4.0) {V_out=255/5*4;V_show_out=4.0;}
+ 209   3                      }
+ 210   2                      if(word_mod==0)
+ 211   2                      {
+ 212   3                              if(Timerature_Set>Temperature)
+ 213   3                              {
+ 214   4                                      V_out=0;
+ 215   4                                      V_show_out=0.0;
+ 216   4                              }
+ 217   3                              else
+ 218   3                              {
+ 219   4                                      V_out=255;
+ 220   4                                      V_show_out=5.0;
+ 221   4                              }
+ 222   3                      }
+ 223   2                      DA_Write(V_out);
+ 224   2              }
+ 225   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1006    ----
+   CONSTANT SIZE    =     26    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     47    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      1    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

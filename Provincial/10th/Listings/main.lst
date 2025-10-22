@@ -1,0 +1,265 @@
+C51 COMPILER V9.59.0.0   MAIN                                                              04/07/2024 18:14:17 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: E:\keil5\C51\BIN\C51.EXE main.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\main.l
+                    -st) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <STC15F2K60S2.H>//start:16:50
+   2          #include <iic.h>
+   3          
+   4          code unsigned char Seg_Table[] =
+   5          {
+   6                  0xc0,//0
+   7                  0xf9,//1
+   8                  0xa4,//2
+   9                  0xb0,//3
+  10                  0x99,//4
+  11                  0x92,//5
+  12                  0x82,//6
+  13                  0xf8,//7
+  14                  0x80,//8
+  15                  0x90,//9
+  16                  0xff,//10
+  17                  0x8e,//F 11
+  18                  0xc1,//U 12
+  19                  0x88,//A
+  20                  0x83,//b
+  21                  0xc6,//C
+  22                  0xa1,//d
+  23                  0x86,//E
+  24          };
+  25          code unsigned char Seg_Wale[] ={0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80};
+  26          unsigned char seg_bus[]={10,10,10,10,10,10,10,10};
+  27          unsigned char point_bus[]={0,0,0,0,0,0,0,0,};
+  28          unsigned char led_bus[]={0,0,0,0,0,0,0,0,};
+  29          unsigned char found_index;
+  30          unsigned char seg_slow_down,key_slow_down,Vread_slow_down;
+  31          unsigned char key_val,key_old,key_down,key_up;
+  32          unsigned int Timer_1000;
+  33          unsigned int freq;
+  34          unsigned char V_RB2;
+  35          bit word_mod0_con=1;
+  36          
+  37          unsigned char seg_show_mod=0; //0-频率 1-电压
+  38          bit word_mod;   //0-VRB2 1-2V
+  39          bit led_con=1;
+  40          bit seg_con=1;
+  41          
+  42          void Timer1_Init(void)          //1毫秒@12.000MHz
+  43          {
+  44   1              AUXR &= 0xBF;                   //定时器时钟12T模式
+  45   1              TMOD &= 0x0F;                   //设置定时器模式
+  46   1              TL1 = 0x18;                             //设置定时初始值
+  47   1              TH1 = 0xFC;                             //设置定时初始值
+  48   1              TF1 = 0;                                //清除TF1标志
+  49   1              TR1 = 1;                                //定时器1开始计时
+  50   1              ET1 = 1;
+  51   1              EA = 1;
+  52   1      }
+  53          void Timer0_Init(void)          //1毫秒@12.000MHz
+  54          {
+C51 COMPILER V9.59.0.0   MAIN                                                              04/07/2024 18:14:17 PAGE 2   
+
+  55   1              TMOD &= 0xF0;                   //设置定时器模式
+  56   1              TMOD |= 0x05;
+  57   1              TL0 = 0x00;                             //设置定时初始值
+  58   1              TH0 = 0x00;                             //设置定时初始值
+  59   1              TF0 = 0;                                //清除TF0标志
+  60   1              TR0 = 1;                                //定时器0开始计时
+  61   1              ET0 = 1;
+  62   1              EA = 1;
+  63   1      }
+  64          void system_init()
+  65          {
+  66   1              P2=P2&0x1f|0x80; P0=0xff;
+  67   1              P2=P2&0x1f|0xa0; P0=0x00;
+  68   1              P2=P2&0x1f;
+  69   1      }
+  70          
+  71          void seg(unsigned char wale,valu,point)
+  72          {
+  73   1              P2=P2&0x1f|0xc0; P0=Seg_Wale[wale];
+  74   1              P2=P2&0x1f|0xe0; P0=Seg_Table[10];
+  75   1              
+  76   1              P2=P2&0x1f|0xc0; P0=Seg_Wale[wale];
+  77   1              P2=P2&0x1f|0xe0; P0=Seg_Table[10];
+  78   1              if(point) 
+  79   1                      P0&=0x7f;
+  80   1              P0&=Seg_Table[valu];
+  81   1              P2=P2&0x1f;
+  82   1      }
+  83          
+  84          void led(unsigned char addr,enable)
+  85          {
+  86   1              unsigned char val=0x00,old=0xff;
+  87   1              if(enable)
+  88   1                      val |= 0x01<<addr;
+  89   1              else
+  90   1                      val &=~ (0x01<<addr);
+  91   1              if(old!=val)
+  92   1              {
+  93   2                      P2=P2&0x1f|0x80; 
+  94   2                      P0=~val;
+  95   2                      P2=P2&0x1f;
+  96   2                      old=val;
+  97   2              }
+  98   1      }
+  99          unsigned char key_read()
+ 100          {
+ 101   1              unsigned char temp=0;
+ 102   1              if(P33==0) temp=4;
+ 103   1              if(P32==0) temp=5;
+ 104   1              if(P31==0) temp=6;
+ 105   1              if(P30==0) temp=7;
+ 106   1              return temp;
+ 107   1      }
+ 108          void led_proc()
+ 109          {
+ 110   1              unsigned char i;
+ 111   1              float v_n;
+ 112   1              for(i=0;i<8;i++) led_bus[i]=0;
+ 113   1              if(led_con==0) return;
+ 114   1              v_n=(float)(V_RB2/51.0);
+ 115   1              if(seg_show_mod==0) led_bus[1]=1;
+ 116   1              if(seg_show_mod==1) led_bus[0]=1;
+C51 COMPILER V9.59.0.0   MAIN                                                              04/07/2024 18:14:17 PAGE 3   
+
+ 117   1              if((1.5<=v_n&&v_n<2.5)||(v_n>=3.5)) led_bus[2]=1;
+ 118   1              if((1000<=freq&&freq<5000)||(freq>=10000)) led_bus[3]=1;
+ 119   1              if(word_mod==0)   led_bus[4]=1;
+ 120   1      }
+ 121          void key_proc()
+ 122          {
+ 123   1              if(key_slow_down) return;
+ 124   1              key_slow_down=1;
+ 125   1      
+ 126   1              key_val=key_read();
+ 127   1              key_down=key_val&(key_val^key_old);
+ 128   1              key_up=~key_val&(key_val^key_old);
+ 129   1              key_old=key_val;
+ 130   1              switch(key_down)
+ 131   1              {
+ 132   2                      case 4:
+ 133   2                              seg_show_mod++;
+ 134   2                              if(seg_show_mod==2) seg_show_mod=0;
+ 135   2                      break;
+ 136   2                      case 5:
+ 137   2                              word_mod^=1;
+ 138   2                              if(word_mod==0) 
+ 139   2                                      word_mod0_con=1;
+ 140   2                              if(word_mod==1) 
+ 141   2                              {
+ 142   3                                      word_mod0_con=0;
+ 143   3                                      V_RB2=255/5*2;
+ 144   3                              }
+ 145   2                      break;
+ 146   2                      case 6:
+ 147   2                              led_con^=1;
+ 148   2                      break;
+ 149   2                      case 7:
+ 150   2                              seg_con^=1;
+ 151   2                      break;
+ 152   2              }
+ 153   1      }
+ 154          void seg_proc()
+ 155          {
+ 156   1              unsigned char i;
+ 157   1              float V_RB2_Show;
+ 158   1              if(seg_slow_down) return;
+ 159   1              seg_slow_down=1;
+ 160   1              for(i=0;i<8;i++)
+ 161   1              {
+ 162   2                      point_bus[i]=0;
+ 163   2                      seg_bus[i]=10;
+ 164   2              }
+ 165   1              if(seg_con==0) return;
+ 166   1              switch(seg_show_mod)
+ 167   1              {
+ 168   2                      case 0:
+ 169   2                              seg_bus[0]=11;
+ 170   2                              if(freq>=0)
+ 171   2                              {seg_bus[7]=freq%10;
+ 172   3                                      if(freq>=10)
+ 173   3                                      {seg_bus[6]=freq/10%10;
+ 174   4                                              if(freq>=100)
+ 175   4                                              {seg_bus[5]=freq/100%10;
+ 176   5                                                      if(freq>=1000)
+ 177   5                                                      {seg_bus[4]=freq/1000%10;
+ 178   6                                                              if(freq>=10000)
+C51 COMPILER V9.59.0.0   MAIN                                                              04/07/2024 18:14:17 PAGE 4   
+
+ 179   6                                                              {seg_bus[3]=freq/10000%10;
+ 180   7                                                                      if(freq>=100000)
+ 181   7                                                                      seg_bus[2]=freq/100000%10;
+ 182   7                                                              }
+ 183   6                                                      }
+ 184   5                                              }
+ 185   4                                      }
+ 186   3                              }
+ 187   2                      break;
+ 188   2                      case 1://V_RB2
+ 189   2                              V_RB2_Show=(float)(V_RB2/51.0);
+ 190   2                              seg_bus[0]=12;
+ 191   2                              seg_bus[5]=(int)V_RB2_Show%10;
+ 192   2                              point_bus[5]=1;
+ 193   2                              seg_bus[6]=(int)(V_RB2_Show*10)%10;
+ 194   2                              seg_bus[7]=(int)(V_RB2_Show*100)%10;
+ 195   2                      break;
+ 196   2              }
+ 197   1              
+ 198   1      }
+ 199          void T1_R(void) interrupt 3
+ 200          {
+ 201   1              if(++seg_slow_down==50) seg_slow_down=0;
+ 202   1              if(++key_slow_down==100) key_slow_down=0;
+ 203   1              if(++found_index==8) found_index=0;
+ 204   1              seg(found_index,seg_bus[found_index],point_bus[found_index]);
+ 205   1              led(found_index,led_bus[found_index]);
+ 206   1              key_proc();
+ 207   1              seg_proc();
+ 208   1              led_proc();
+ 209   1              if(++Timer_1000==1000)
+ 210   1              {
+ 211   2                      Timer_1000=0;
+ 212   2                      freq=(TH0<<8)|TL0;
+ 213   2                      TH0=TL0=0;
+ 214   2              }
+ 215   1              if(word_mod0_con==1)
+ 216   1              {
+ 217   2              if(++Vread_slow_down==40)
+ 218   2                      {
+ 219   3                              Vread_slow_down=0;
+ 220   3                              V_RB2=AD_Read(0x43);
+ 221   3                      }
+ 222   2              }
+ 223   1      }
+ 224          void main()
+ 225          {
+ 226   1              Timer1_Init();
+ 227   1              Timer0_Init();
+ 228   1              system_init();
+ 229   1              while(1)
+ 230   1              {
+ 231   2                      
+ 232   2              }
+ 233   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1060    ----
+   CONSTANT SIZE    =     26    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+C51 COMPILER V9.59.0.0   MAIN                                                              04/07/2024 18:14:17 PAGE 5   
+
+   DATA SIZE        =     38       8
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      4    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
