@@ -1,0 +1,375 @@
+C51 COMPILER V9.59.0.0   MAIN                                                              05/07/2024 15:48:39 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE main.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\main
+                    -.lst) TABS(3) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <STC15F2K60S2.H>//1h14min
+   2          #include <intrins.h>
+   3          #include <iic.h>
+   4          
+   5          sbit US_TX=P1^0;
+   6          sbit US_RX=P1^1;
+   7          
+   8          sbit ROW1=P3^0;
+   9          sbit ROW2=P3^1;
+  10          sbit ROW3=P3^2;
+  11          sbit ROW4=P3^3;
+  12          sbit COL1=P4^4;
+  13          sbit COL2=P4^2;
+  14          sbit COL3=P3^5;
+  15          sbit COL4=P3^4;
+  16          
+  17          code unsigned char Seg_Table[] =
+  18          {
+  19          0xc0,//0
+  20          0xf9,//1
+  21          0xa4,//2
+  22          0xb0,//3
+  23          0x99,//4
+  24          0x92,//5
+  25          0x82,//6
+  26          0xf8,//7
+  27          0x80,//8
+  28          0x90,//9
+  29          0x88,//A
+  30          0x83,//b
+  31          0xc6,//C
+  32          0xa1,//d
+  33          0x86,//E
+  34          0x8e,//F
+  35          0xff//16
+  36          };
+  37          code unsigned char Seg_wale[] = {0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80};
+  38          unsigned char seg_sd,key_sd;
+  39          unsigned char index,seg_bus[]={16,16,16,16,16,16,16,16};
+  40          unsigned char led_bus[]={0,0,0,0,0,0,0,0};
+  41          unsigned char key_down,key_val,key_old,key_up;
+  42          unsigned char distance_measure,distance_set;
+  43          unsigned char set;
+  44          unsigned char compute_count,compute_out,compute_save[10];
+  45          unsigned char eeprom__save1[5],eeprom__save2[5];
+  46          bit operate=0;    //0.无操作,1.加操作
+  47          unsigned char count_watch;
+  48          unsigned int Time_200;
+  49          unsigned char flash_count;
+  50          bit us_flag;
+  51          
+  52          unsigned char work_mod=0;     //0-操作 1-回显 2-参数
+  53          void Delay20ms(void) //@12.000MHz
+  54          {
+C51 COMPILER V9.59.0.0   MAIN                                                              05/07/2024 15:48:39 PAGE 2   
+
+  55   1         unsigned char data i, j;
+  56   1      
+  57   1         i = 234;
+  58   1         j = 115;
+  59   1         do
+  60   1         {
+  61   2            while (--j);
+  62   2         } while (--i);
+  63   1      }
+  64          void Timer0_Init(void)     //1000微秒@12.000MHz
+  65          {
+  66   1         AUXR &= 0x7F;        //定时器时钟12T模式
+  67   1         TMOD &= 0x00;        //设置定时器模式
+  68   1         TL0 = 0x18;          //设置定时初始值
+  69   1         TH0 = 0xFC;          //设置定时初始值
+  70   1         TF0 = 0;          //清除TF0标志
+  71   1         TR0 = 1;          //定时器0开始计时
+  72   1         ET0 = 1;
+  73   1         EA = 1;
+  74   1      }
+  75          void Delay20us(void) //@12.000MHz
+  76          {
+  77   1         unsigned char data i;
+  78   1      
+  79   1         _nop_();
+  80   1         _nop_();
+  81   1         i = 57;
+  82   1         while (--i);
+  83   1      }
+  84          void system_init()
+  85          {
+  86   1         P2=P2&0x1f|0x80;
+  87   1         P0=0xff;
+  88   1         P2=P2&0x1f|0xa0;
+  89   1         P0=0x00;
+  90   1         P2=P2&0x1f;
+  91   1      }
+  92          unsigned char key_read()
+  93          {
+  94   1         unsigned char i=0;
+  95   1         ROW1=ROW2=ROW3=ROW4=1;
+  96   1         COL1=0;COL2=COL3=COL4=1;
+  97   1         if(ROW4==0) i=4;
+  98   1         if(ROW3==0) i=5;
+  99   1         if(ROW2==0) i=6;
+ 100   1         if(ROW1==0) i=7;
+ 101   1         return i;
+ 102   1      }
+ 103          void seg(unsigned char wale,val)
+ 104          {
+ 105   1         P2=P2&0x1f|0xc0;
+ 106   1         P0=Seg_wale[wale];
+ 107   1         P2=P2&0x1f|0xe0;
+ 108   1         P0=Seg_Table[16];
+ 109   1         P2=P2&0x1f|0xc0;
+ 110   1         P0=Seg_wale[wale];
+ 111   1         P2=P2&0x1f|0xe0;
+ 112   1         P0=Seg_Table[val];
+ 113   1         P2=P2&0x1f;
+ 114   1         
+ 115   1      }
+ 116          void led(unsigned char addr,enable)
+C51 COMPILER V9.59.0.0   MAIN                                                              05/07/2024 15:48:39 PAGE 3   
+
+ 117          {
+ 118   1         unsigned char val,old;
+ 119   1         if(enable)
+ 120   1            val|=0x01<<addr;
+ 121   1         else
+ 122   1            val&=~(0x01<<addr);
+ 123   1         if(old!=val)
+ 124   1         {
+ 125   2            P2=P2&0x1f|0x80;
+ 126   2            P0=~val;
+ 127   2            old=val;
+ 128   2         }
+ 129   1      }
+ 130          /*-----------------------------------------*/
+ 131          void us_wave()
+ 132          {
+ 133   1         unsigned char i;
+ 134   1         for(i=0;i<10;i++)
+ 135   1         {
+ 136   2            US_TX=1;Delay20us();
+ 137   2            US_TX=0;
+ 138   2         }
+ 139   1      }
+ 140          unsigned char us_on()
+ 141          {
+ 142   1         TH1=TL1=0;
+ 143   1         us_wave();
+ 144   1         TR1=1;
+ 145   1         while(US_RX==1&&TF1==0);
+ 146   1         TR1=0;
+ 147   1         us_flag=1;
+ 148   1         flash_count=0;
+ 149   1         if(TF1==1) 
+ 150   1         {
+ 151   2            TF1=0;
+ 152   2            return 0;
+ 153   2         }
+ 154   1         else 
+ 155   1            return ((TH1<<8)|TL1)*0.017;
+ 156   1      }
+ 157          void limit_proc()
+ 158          {
+ 159   1         unsigned char v_out=0;
+ 160   1         if(set<compute_save[compute_count]) v_out=compute_save[compute_count]-set;
+ 161   1         v_out=v_out+v_out*0.02;
+ 162   1         if(v_out>=255) v_out=255;
+ 163   1         da_write(v_out);
+ 164   1      }
+ 165          void led_proc()
+ 166          {
+ 167   1         unsigned char i;
+ 168   1         for(i=1;i<8;i++) led_bus[i]=0;
+ 169   1         if(work_mod==2) led_bus[6]=1;
+ 170   1         if(work_mod==1) led_bus[7]=1;
+ 171   1         if(work_mod==0) us_flag=1;
+ 172   1         else {us_flag=0;led_bus[0]=0;}
+ 173   1      }
+ 174          void key_proc()
+ 175          {
+ 176   1         unsigned char i,j;
+ 177   1         if(key_sd) return;
+ 178   1         key_sd=1;
+C51 COMPILER V9.59.0.0   MAIN                                                              05/07/2024 15:48:39 PAGE 4   
+
+ 179   1         
+ 180   1         key_val=key_read();
+ 181   1         key_down=key_val&(key_val^key_old);
+ 182   1         key_up=~key_val&(key_val^key_old);
+ 183   1         key_old=key_val;
+ 184   1         
+ 185   1         
+ 186   1         switch(key_down)
+ 187   1         {
+ 188   2            case 4:
+ 189   2               work_mod=0;
+ 190   2               compute_count++;
+ 191   2               if(compute_count==10) compute_count=0;
+ 192   2               distance_measure=us_on();
+ 193   2               compute_save[compute_count]=distance_measure;
+ 194   2               for(i=0,j=0;i<5;i++) eeprom__save1[j++]=compute_save[i];
+ 195   2               for(i=5,j=0;i<10;i++) eeprom__save2[j++]=compute_save[i];
+ 196   2               eep_write(eeprom__save1,0,5);
+ 197   2               Delay20ms();
+ 198   2               eep_write(eeprom__save2,8,5);
+ 199   2            break;
+ 200   2            case 5:
+ 201   2                  work_mod=1;
+ 202   2                  count_watch=compute_count;
+ 203   2            break;
+ 204   2            case 6:
+ 205   2               if(work_mod==2)
+ 206   2               {
+ 207   3                  distance_set=set;
+ 208   3                  work_mod=0;
+ 209   3               }
+ 210   2               if(work_mod!=2)
+ 211   2               {
+ 212   3                  set=distance_set;
+ 213   3                  work_mod=2;
+ 214   3               }
+ 215   2            break;
+ 216   2            case 7:
+ 217   2               switch(work_mod)
+ 218   2               {
+ 219   3                  case 0:
+ 220   3                     operate^=1;
+ 221   3                     if(operate==1)
+ 222   3                     {
+ 223   4                        compute_out=compute_save[compute_count]+compute_save[compute_count-1];
+ 224   4                        if(compute_count==0)
+ 225   4                        {
+ 226   5                           compute_out=compute_save[compute_count]+compute_save[9];
+ 227   5                        }
+ 228   4                     }
+ 229   3                  break;
+ 230   3                  case 1:
+ 231   3                     count_watch++;
+ 232   3                     if(count_watch==10) count_watch=0;
+ 233   3                  break;
+ 234   3                  case 2:
+ 235   3                     set+=10;
+ 236   3                     if(set>90) set=0;
+ 237   3                  break;
+ 238   3               }
+ 239   2            break;
+ 240   2         }
+C51 COMPILER V9.59.0.0   MAIN                                                              05/07/2024 15:48:39 PAGE 5   
+
+ 241   1      }
+ 242          void seg_proc()
+ 243          {
+ 244   1         unsigned char i;
+ 245   1         if(seg_sd) return;
+ 246   1         seg_sd=1;
+ 247   1         for(i=0;i<8;i++) seg_bus[i]=16;
+ 248   1         switch(work_mod)
+ 249   1         {
+ 250   2            case 0:
+ 251   2               if(work_mod==0)
+ 252   2               {
+ 253   3                  seg_bus[0]=operate;
+ 254   3                  if(operate==0)
+ 255   3                  {
+ 256   4                     if(compute_count==0)
+ 257   4                     {
+ 258   5                        seg_bus[2]=compute_save[9]/100%10;
+ 259   5                        seg_bus[3]=compute_save[9]/10%10;
+ 260   5                        seg_bus[4]=compute_save[9]%10;
+ 261   5                     }
+ 262   4                     if(compute_count!=0)
+ 263   4                     {
+ 264   5                        seg_bus[2]=compute_save[compute_count-1]/100%10;
+ 265   5                        seg_bus[3]=compute_save[compute_count-1]/10%10;
+ 266   5                        seg_bus[4]=compute_save[compute_count-1]%10;
+ 267   5                     }
+ 268   4                  }
+ 269   3                  if(operate==1)
+ 270   3                  {
+ 271   4                     if(compute_out>=100)
+ 272   4                        seg_bus[2]=compute_out/100%10;
+ 273   4                     if(compute_out>=10)
+ 274   4                        seg_bus[3]=compute_out/10%10;
+ 275   4                     if(compute_out>=0)
+ 276   4                        seg_bus[4]=compute_out%10;
+ 277   4                  }
+ 278   3                  seg_bus[5]=compute_save[compute_count]/100%10;
+ 279   3                  seg_bus[6]=compute_save[compute_count]/10%10;
+ 280   3                  seg_bus[7]=compute_save[compute_count]%10;
+ 281   3               }
+ 282   2            break;
+ 283   2            case 1://count_watch
+ 284   2                  seg_bus[0]=(count_watch+1)/10;
+ 285   2                  seg_bus[1]=(count_watch+1)%10;
+ 286   2               seg_bus[5]=compute_save[count_watch]/100%10;
+ 287   2               seg_bus[6]=compute_save[count_watch]/10%10;
+ 288   2               seg_bus[7]=compute_save[count_watch]%10;
+ 289   2            break;
+ 290   2            case 2:
+ 291   2               seg_bus[0]=15;
+ 292   2               seg_bus[6]=set/10%10;
+ 293   2               seg_bus[7]=set%10;
+ 294   2            break;
+ 295   2         }
+ 296   1      }
+ 297          void Timer0_serve(void) interrupt 1
+ 298          {
+ 299   1         if(++seg_sd==50) seg_sd=0;
+ 300   1         if(++key_sd==100) key_sd=0;
+ 301   1         if(++index==8) index=0;
+ 302   1         seg(index,seg_bus[index]);
+C51 COMPILER V9.59.0.0   MAIN                                                              05/07/2024 15:48:39 PAGE 6   
+
+ 303   1         led(index,led_bus[index]);
+ 304   1         led_proc();key_proc();seg_proc();
+ 305   1         
+ 306   1         if(us_flag==1)
+ 307   1         {
+ 308   2            if(flash_count!=10)
+ 309   2            {
+ 310   3               if(++Time_200==200)
+ 311   3               {
+ 312   4                  Time_200=0;
+ 313   4                  flash_count++;
+ 314   4                  led_bus[0]^=1;
+ 315   4               }
+ 316   3         }
+ 317   2            if(flash_count==10)
+ 318   2            {
+ 319   3               us_flag=0;
+ 320   3               flash_count=0;
+ 321   3               Time_200=0;
+ 322   3               led_bus[0]=0;
+ 323   3            }
+ 324   2         }
+ 325   1      }
+ 326          void main()
+ 327          {
+ 328   1         unsigned char i,j;
+ 329   1         eep_read(eeprom__save1,0,5);
+ 330   1         Delay20ms();
+ 331   1         eep_read(eeprom__save2,8,5);
+ 332   1         Delay20ms();
+ 333   1         for(i=0,j=0;i<5;i++) compute_save[i]=eeprom__save1[j++];
+ 334   1         for(i=5,j=0;i<10;i++) compute_save[i]=eeprom__save2[j++];
+ 335   1         system_init();
+ 336   1         Timer0_Init();
+ 337   1         while(1)
+ 338   1         {  
+ 339   2            limit_proc();
+ 340   2         }
+ 341   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1325    ----
+   CONSTANT SIZE    =     25    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     53       2
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      2    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

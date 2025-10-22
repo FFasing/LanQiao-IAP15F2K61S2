@@ -1,0 +1,503 @@
+C51 COMPILER V9.59.0.0   MAIN                                                              05/04/2024 21:10:13 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE main.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\main
+                    -.lst) TABS(3) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <STC15F2K60S2.H>//4h
+   2          #include <iic.h>
+   3          #include <ds1302.h>
+   4          
+   5          sbit ROW1=P3^0;
+   6          sbit ROW2=P3^1;
+   7          sbit ROW3=P3^2;
+   8          sbit ROW4=P3^3;
+   9          sbit COL1=P4^4;
+  10          sbit COL2=P4^2;
+  11          sbit COL3=P3^5;
+  12          sbit COL4=P3^4;
+  13          
+  14          code unsigned char Seg_Table[] =
+  15          {
+  16             0xc0,//0
+  17             0xf9,//1
+  18             0xa4,//2
+  19             0xb0,//3
+  20             0x99,//4
+  21             0x92,//5
+  22             0x82,//6
+  23             0xf8,//7
+  24             0x80,//8
+  25             0x90,//9
+  26             0x88,//A
+  27             0x83,//b
+  28             0xc6,//C
+  29             0xa1,//d
+  30             0x86,//E
+  31             0x8e,//F
+  32             0xff,//16
+  33             0xbf//- 17
+  34          };
+  35          code unsigned char Seg_Wale[] = {0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80};
+  36          unsigned char seg_slow_down,key_slow_down;
+  37          unsigned char seg_index,seg_buf[]={16,16,16,16,16,16,16,16};
+  38          unsigned char led_buf[]={0,0,0,0,0,0,0,0};
+  39          unsigned char key_val,key_old,key_down,key_up;
+  40          unsigned int Timer_1000,Timer_200;
+  41          unsigned int freq;
+  42          unsigned int V_RB2;
+  43          bit mod1_flash;
+  44          char time_set;
+  45          unsigned char event_mod;
+  46          
+  47          unsigned char VL,VH;
+  48          unsigned char time[]={0x23,0x59,0x55};
+  49          unsigned char time_save[]={0,0,0};
+  50          unsigned char word_mod; //0-rull 1-time 2-V_RB2 3-VLVH_SET 4-freq 5-search
+  51          unsigned char mod1_set,mod2_set,mod3_set,mod4_set;
+  52          void Timer0_Init(void)     //1毫秒@12.000MHz
+  53          {
+  54   1         AUXR &= 0x7F;        //定时器时钟12T模式
+C51 COMPILER V9.59.0.0   MAIN                                                              05/04/2024 21:10:13 PAGE 2   
+
+  55   1         TMOD &= 0xF0;        //设置定时器模式
+  56   1         TMOD |= 0x05;
+  57   1         TL0 = 0x00;          //设置定时初始值
+  58   1         TH0 = 0x00;          //设置定时初始值
+  59   1         TF0 = 0;          //清除TF0标志
+  60   1         TR0 = 1;          //定时器0开始计时
+  61   1      }
+  62          void Timer1_Init(void)     //1毫秒@12.000MHz
+  63          {
+  64   1         AUXR &= 0xBF;        //定时器时钟12T模式
+  65   1         TMOD &= 0x0F;        //设置定时器模式
+  66   1         TL1 = 0x18;          //设置定时初始值
+  67   1         TH1 = 0xFC;          //设置定时初始值
+  68   1         TF1 = 0;          //清除TF1标志
+  69   1         TR1 = 1;          //定时器1开始计时
+  70   1         ET1 = 1;
+  71   1         EA = 1;
+  72   1      }
+  73          void system_init(void)
+  74          {
+  75   1         P2 = P2 & 0X1f |0x80;//led
+  76   1         P0 = 0xff;
+  77   1         P2 = P2 & 0X1f |0xa0;//other
+  78   1         P0 = 0x00;
+  79   1         P2 = P2 & 0X1f ;
+  80   1      }
+  81          void seg(unsigned char wale,valu)
+  82          {
+  83   1         P2 = P2 & 0X1f |0xc0;
+  84   1         P0 = Seg_Wale[wale];
+  85   1         P2 = P2 & 0X1f |0xe0;
+  86   1         P0 = Seg_Table[16];
+  87   1         P2 = P2 & 0X1f |0xc0;
+  88   1         P0 = Seg_Wale[wale];
+  89   1         P2 = P2 & 0X1f |0xe0;
+  90   1         P0 = Seg_Table[valu];
+  91   1         P2 = P2 & 0X1f ;
+  92   1      }
+  93          unsigned char key_read(void)
+  94          {
+  95   1         unsigned char val=0;
+  96   1         ROW1=ROW2=ROW3=ROW4=1;
+  97   1         COL1=0;COL2=COL3=COL4=1;
+  98   1         if(ROW4==0) val=4;
+  99   1         if(ROW3==0) val=5;
+ 100   1         if(ROW2==0) val=6;
+ 101   1         if(ROW1==0) val=7;
+ 102   1         COL2=0;COL1=COL3=COL4=1;
+ 103   1         if(ROW4==0) val=8;
+ 104   1         if(ROW3==0) val=9;
+ 105   1         if(ROW2==0) val=10;
+ 106   1         if(ROW1==0) val=11;
+ 107   1         return val;
+ 108   1      }
+ 109          void dat_read(void)
+ 110          {
+ 111   1         if(Timer_200) return;
+ 112   1         Timer_200=1;
+ 113   1         V_RB2=(float)((ad_read(0x43)*10.0/3.0)/17.0*100.0);
+ 114   1         Time_Read(time);
+ 115   1            if((V_RB2/100)<=(int)VL) 
+ 116   1            {
+C51 COMPILER V9.59.0.0   MAIN                                                              05/04/2024 21:10:13 PAGE 3   
+
+ 117   2               event_mod=0;
+ 118   2               eeprom_write(time,1,3);
+ 119   2            }
+ 120   1            if((V_RB2/100)>=(int)VH) 
+ 121   1            {
+ 122   2               event_mod=1;
+ 123   2               eeprom_write(time,1,3);
+ 124   2            }
+ 125   1            
+ 126   1      }
+ 127          void key_proc(void)
+ 128          {
+ 129   1         unsigned char temp;
+ 130   1         if(key_slow_down) return;
+ 131   1         key_slow_down=1;
+ 132   1         key_val=key_read();
+ 133   1         key_down=key_val&(key_val^key_old);
+ 134   1         key_up=~key_val&(key_val^key_old);
+ 135   1         key_old=key_val;
+ 136   1         switch(key_down)
+ 137   1         {
+ 138   2            case 9:
+ 139   2               word_mod=5;
+ 140   2               mod4_set=0;
+ 141   2            break;
+ 142   2            
+ 143   2            case 7:
+ 144   2            if(word_mod==1) mod1_set++;
+ 145   2            if(mod1_set==1) {Time_Read(time);time_set=time[0];}
+ 146   2            if(mod1_set==2) {Time_Read(time);time_set=time[1];}
+ 147   2            if(mod1_set==3) {Time_Read(time);time_set=time[2];}
+ 148   2            if(mod1_set==4) mod1_set=0;
+ 149   2            if(word_mod!=1)
+ 150   2            {
+ 151   3               word_mod=1;mod1_set=0;
+ 152   3            }
+ 153   2            break;
+ 154   2            
+ 155   2            case 6:
+ 156   2               word_mod=2;
+ 157   2               mod2_set=0;
+ 158   2            break;
+ 159   2            
+ 160   2            case 4:
+ 161   2               if(word_mod==2) 
+ 162   2               {
+ 163   3                  word_mod=3;
+ 164   3                  mod2_set=0;
+ 165   3               }
+ 166   2               if(word_mod==3) 
+ 167   2               {
+ 168   3                  mod2_set++;
+ 169   3                  if(mod2_set==3) 
+ 170   3                  {
+ 171   4                     word_mod=2;
+ 172   4                     mod2_set=0;
+ 173   4                  }
+ 174   3               }
+ 175   2               if(word_mod==4)
+ 176   2               {
+ 177   3                  mod3_set^=1;
+ 178   3               }
+C51 COMPILER V9.59.0.0   MAIN                                                              05/04/2024 21:10:13 PAGE 4   
+
+ 179   2               if(word_mod==5)
+ 180   2               {
+ 181   3                  mod4_set^=1;
+ 182   3                  if(mod4_set==1)
+ 183   3                  {
+ 184   4                     eeprom_read(time_save,1,3);
+ 185   4                  }
+ 186   3               }
+ 187   2               break;
+ 188   2               
+ 189   2            case 5:
+ 190   2               word_mod=4;
+ 191   2               mod3_set=0;
+ 192   2            break;
+ 193   2            
+ 194   2            case 10:
+ 195   2               if(word_mod==3)
+ 196   2               {
+ 197   3                  switch(mod2_set)
+ 198   3                  {
+ 199   4                     case 2:
+ 200   4                        VL-=5;
+ 201   4                        if(VL<=0) VL=0;
+ 202   4                        eeprom_write(&VL,15,1);
+ 203   4                     break;
+ 204   4                     case 1:
+ 205   4                        VH-=5;
+ 206   4                        if(VH<=0) VH=0;
+ 207   4                        eeprom_write(&VH,16,1);
+ 208   4                     break;
+ 209   4                  }
+ 210   3               }
+ 211   2               if(word_mod==1)
+ 212   2               {
+ 213   3                  if(mod1_set==1) 
+ 214   3                  {
+ 215   4                     if(time_set==0)   time_set=35;
+ 216   4                     else
+ 217   4                     {
+ 218   5                     time_set--;
+ 219   5                     if(time_set%16==15)  time_set-=6;
+ 220   5                     }
+ 221   4                     time[0]=time_set;
+ 222   4                  }
+ 223   3                  if(mod1_set==2) //89
+ 224   3                  {
+ 225   4                     if(time_set==0)   time_set=89;
+ 226   4                     else
+ 227   4                     {
+ 228   5                     time_set--;
+ 229   5                     if(time_set%16==15)  time_set-=6;
+ 230   5                     }
+ 231   4                     time[1]=time_set;
+ 232   4                  }
+ 233   3                  if(mod1_set==3) 
+ 234   3                  {
+ 235   4                     if(time_set==0)   time_set=89;
+ 236   4                     else
+ 237   4                     {
+ 238   5                     time_set--;
+ 239   5                     if(time_set%16==15)  time_set-=6;
+ 240   5                     }
+C51 COMPILER V9.59.0.0   MAIN                                                              05/04/2024 21:10:13 PAGE 5   
+
+ 241   4                     time[2]=time_set;
+ 242   4                  }
+ 243   3                  Time_Write(time);
+ 244   3               }
+ 245   2            break;
+ 246   2               
+ 247   2            case 11:
+ 248   2               if(word_mod==3)
+ 249   2               {
+ 250   3                  switch(mod2_set)
+ 251   3                  {
+ 252   4                     case 2:
+ 253   4                        VL+=5;
+ 254   4                        if(VL>=95) VL=95;
+ 255   4                        eeprom_write(&VL,15,1);
+ 256   4                     break;
+ 257   4                     case 1:
+ 258   4                        VH+=5;
+ 259   4                        if(VH>=95) VH=95;
+ 260   4                        eeprom_write(&VH,16,1);
+ 261   4                     break;
+ 262   4                  }
+ 263   3               }
+ 264   2               if(word_mod==1)
+ 265   2               {
+ 266   3                  if(mod1_set==1) 
+ 267   3                  {
+ 268   4                     time_set++;
+ 269   4                     if(time_set%16==10)  time_set+=6;
+ 270   4                     if(time_set/16==2&&time_set%16==4)  time_set=0;
+ 271   4                     time[0]=time_set;
+ 272   4                  }
+ 273   3                  if(mod1_set==2) 
+ 274   3                  {
+ 275   4                     time_set++;
+ 276   4                     if(time_set%16==10)  time_set+=6;
+ 277   4                     if(time_set/16==6)   time_set=0;
+ 278   4                     time[1]=time_set;
+ 279   4                  }
+ 280   3                  if(mod1_set==3) 
+ 281   3                  {
+ 282   4                     time_set++;
+ 283   4                     if(time_set%16==10)  time_set+=6;
+ 284   4                     if(time_set/16==6)   time_set=0;
+ 285   4                     time[2]=time_set;
+ 286   4                  }
+ 287   3                  Time_Write(time);
+ 288   3               }
+ 289   2            break;
+ 290   2         }
+ 291   1      }
+*** WARNING C280 IN LINE 129 OF main.c: 'temp': unreferenced local variable
+ 292          void seg_proc(void)
+ 293          {
+ 294   1         unsigned char i;
+ 295   1         if(seg_slow_down) return;
+ 296   1         seg_slow_down=1;
+ 297   1         for(i=0;i<8;i++) seg_buf[i]=16;
+ 298   1      
+ 299   1         switch(word_mod)
+ 300   1         {
+ 301   2            case 1:
+C51 COMPILER V9.59.0.0   MAIN                                                              05/04/2024 21:10:13 PAGE 6   
+
+ 302   2               if(word_mod==1)
+ 303   2               {
+ 304   3                  if(mod1_set==1)
+ 305   3                  {
+ 306   4                     mod1_flash?(seg_buf[0]=time_set/16):0;
+ 307   4                     mod1_flash?(seg_buf[1]=time_set%16):0;
+ 308   4                  }
+ 309   3                  else
+ 310   3                  {
+ 311   4                     seg_buf[0]=time[0]/16;
+ 312   4                     seg_buf[1]=time[0]%16;
+ 313   4                  }
+ 314   3                  if(mod1_set==2)
+ 315   3                  {
+ 316   4                     mod1_flash?(seg_buf[3]=time_set/16):0;
+ 317   4                     mod1_flash?(seg_buf[4]=time_set%16):0;
+ 318   4                  }
+ 319   3                  else
+ 320   3                  {
+ 321   4                     seg_buf[3]=time[1]/16;
+ 322   4                     seg_buf[4]=time[1]%16;
+ 323   4                  }
+ 324   3                  if(mod1_set==3)
+ 325   3                  {
+ 326   4                     mod1_flash?(seg_buf[6]=time_set/16):0;
+ 327   4                     mod1_flash?(seg_buf[7]=time_set%16):0;
+ 328   4                  }
+ 329   3                  else
+ 330   3                  {
+ 331   4                     seg_buf[6]=time[2]/16;
+ 332   4                     seg_buf[7]=time[2]%16;
+ 333   4                  }
+ 334   3                  seg_buf[5]=seg_buf[2]=17;
+ 335   3               }
+ 336   2            break;
+ 337   2            case 2:
+ 338   2               if(word_mod==2)
+ 339   2               {
+ 340   3                  seg_buf[0]=17;
+ 341   3                  seg_buf[1]=1;
+ 342   3                  seg_buf[2]=17;
+ 343   3                  seg_buf[4]=V_RB2/1000%10;
+ 344   3                  seg_buf[5]=V_RB2/100%10;
+ 345   3                  seg_buf[6]=V_RB2/10%10;
+ 346   3                  seg_buf[7]=V_RB2%10;
+ 347   3               }
+ 348   2            break;
+ 349   2            case 3:
+ 350   2               if(word_mod==3)
+ 351   2               {
+ 352   3                  if(mod2_set==1)
+ 353   3                  {
+ 354   4                     mod1_flash?(seg_buf[0]=VH/10%10):0;
+ 355   4                     mod1_flash?(seg_buf[1]=VH%10):0;
+ 356   4                     mod1_flash?(seg_buf[2]=0):0;
+ 357   4                     mod1_flash?(seg_buf[3]=0):0;
+ 358   4                  }
+ 359   3                  else
+ 360   3                  {
+ 361   4                     seg_buf[0]=VH/10%10;
+ 362   4                     seg_buf[1]=VH%10;
+ 363   4                     seg_buf[2]=0;
+C51 COMPILER V9.59.0.0   MAIN                                                              05/04/2024 21:10:13 PAGE 7   
+
+ 364   4                     seg_buf[3]=0;
+ 365   4                  }
+ 366   3                  if(mod2_set==2)
+ 367   3                  {
+ 368   4                     mod1_flash?(seg_buf[4]=VL/10%10):0;
+ 369   4                     mod1_flash?(seg_buf[5]=VL%10):0;
+ 370   4                     mod1_flash?(seg_buf[6]=0):0;
+ 371   4                     mod1_flash?(seg_buf[7]=0):0;
+ 372   4                  }
+ 373   3                  else
+ 374   3                  {
+ 375   4                     seg_buf[4]=VL/10%10;
+ 376   4                     seg_buf[5]=VL%10;
+ 377   4                     seg_buf[6]=0;
+ 378   4                     seg_buf[7]=0;
+ 379   4                  }
+ 380   3               }
+ 381   2            break;
+ 382   2            case 4:
+ 383   2               if(word_mod==4)
+ 384   2               {
+ 385   3                  switch(mod3_set)
+ 386   3                  {
+ 387   4                     case 0:
+ 388   4                        seg_buf[0]=17;
+ 389   4                        seg_buf[1]=2;
+ 390   4                        seg_buf[2]=17;
+ 391   4                        seg_buf[3]=freq/10000%10;
+ 392   4                        seg_buf[4]=freq/1000%10;
+ 393   4                        seg_buf[5]=freq/100%10;
+ 394   4                        seg_buf[6]=freq/10%10;
+ 395   4                        seg_buf[7]=freq%10;
+ 396   4                     break;
+ 397   4                     case 1:
+ 398   4                        seg_buf[0]=17;
+ 399   4                        seg_buf[1]=2;
+ 400   4                        seg_buf[2]=17;
+ 401   4                        seg_buf[3]=0;
+ 402   4                        seg_buf[4]=1;
+ 403   4                        seg_buf[5]=0;
+ 404   4                        seg_buf[6]=0;
+ 405   4                        seg_buf[7]=0;
+ 406   4                     break;
+ 407   4                  }
+ 408   3               }
+ 409   2            break;
+ 410   2            case 5:
+ 411   2            if(word_mod==5)
+ 412   2            {
+ 413   3               switch(mod4_set)
+ 414   3               {
+ 415   4                  case 0:
+ 416   4                     seg_buf[6]=event_mod/10%10;
+ 417   4                     seg_buf[7]=event_mod%10;
+ 418   4                  break;
+ 419   4                  case 1:
+ 420   4                     seg_buf[0]=time_save[0]/16;
+ 421   4                     seg_buf[1]=time_save[0]%16;
+ 422   4                     seg_buf[3]=time_save[1]/16;
+ 423   4                     seg_buf[4]=time_save[1]%16;
+ 424   4                     seg_buf[6]=time_save[2]/16;
+ 425   4                     seg_buf[7]=time_save[2]%16;
+C51 COMPILER V9.59.0.0   MAIN                                                              05/04/2024 21:10:13 PAGE 8   
+
+ 426   4                  break;
+ 427   4               }
+ 428   3            }
+ 429   2         break;
+ 430   2         }
+ 431   1         
+ 432   1      }
+ 433          void Timer1_rountine(void) interrupt 3
+ 434          {
+ 435   1         if(++Timer_200==200) Timer_200=0;
+ 436   1         if(++seg_slow_down==50) seg_slow_down=0;
+ 437   1         if(++key_slow_down==100) key_slow_down=0;
+ 438   1         if(++seg_index==8) seg_index=0;
+ 439   1         seg(seg_index,seg_buf[seg_index]);
+ 440   1         seg_proc();key_proc();
+ 441   1         if(++Timer_1000==1000)
+ 442   1         {
+ 443   2            Timer_1000=0;
+ 444   2            freq=(TH0<<8)|TL0;
+ 445   2            TH0=TL0=0;
+ 446   2            mod1_flash^=1;
+ 447   2         }
+ 448   1      }
+ 449          void main()
+ 450          {
+ 451   1      // eeprom_read(time,1,3);
+ 452   1         eeprom_read(&VH,16,1);
+ 453   1         system_init();
+ 454   1         Timer0_Init();
+ 455   1         Timer1_Init();
+ 456   1      // eeprom_write(&VL,15,1);
+ 457   1         eeprom_read(&VL,15,1);
+ 458   1         Time_Write(time);
+ 459   1      // eeprom_write(&VH,20,1);
+ 460   1         while(1)
+ 461   1         {
+ 462   2            dat_read();
+ 463   2         }
+ 464   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   2110    ----
+   CONSTANT SIZE    =     26    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     46       1
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      1    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  1 WARNING(S),  0 ERROR(S)
