@@ -1,0 +1,316 @@
+#include <STC15F2K60S2.H>
+#include <ds1302.h>
+#include <onewire.h>
+#include <iic.h>
+
+sbit ROW1=P3^0;
+sbit ROW2=P3^1;
+sbit ROW3=P3^2;
+sbit ROW4=P3^3;
+sbit COL1=P4^4;
+sbit COL2=P4^2;
+sbit COL3=P3^5;
+sbit COL4=P3^4;
+
+code unsigned char Seg_Table[] ={
+	0xc0,//0
+	0xf9,//1
+	0xa4,//2
+	0xb0,//3
+	0x99,//4
+	0x92,//5
+	0x82,//6
+	0xf8,//7
+	0x80,//8
+	0x90,//9
+	0x88,//A
+	0x83,//b
+	0xc6,//C
+	0xa1,//d
+	0x86,//E
+	0x8e,//F
+	0xff,//  16
+	0x89//H 17
+};
+code unsigned char Seg_Wale[] = {0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80};
+unsigned int temperature_slow,index,seg_slow,key_slow,led_slow,dat_slow;
+unsigned char 	seg_buf[]={16,16,16,16,16,16,16,16},
+					led_buf[]={0,0,0,0,0,0,0,0},
+					point_buf[]={0,0,0,0,0,0,0,0};
+unsigned char key_val,key_old,key_down,key_up;
+unsigned int Timer_3000;
+bit t_c;
+					
+float temperature;
+unsigned char time[]={0x16,0x59,0x50};
+float V_RD1;unsigned char V_temp;
+bit light,light_old;	//0-亮 1-暗
+bit t_c;unsigned char t_n;
+
+char 	hour_set=23,
+		temperature_set=25,
+		led_set=4;
+unsigned char 	show_mod;				//0-数据 1-参数
+unsigned char 	mod0_s,					//0-时间 1-温度 2-亮、暗
+					mod1_s;					//0-时间 1-温度 2-指示灯
+void Delay10ms(void)	//@12.000MHz
+{
+	unsigned char data i, j;
+
+	i = 117;
+	j = 184;
+	do
+	{
+		while (--j);
+	} while (--i);
+}
+void dat_read()
+{
+	if(dat_slow) return;
+	dat_slow=1;
+	time_read(time);
+	V_RD1=voltage_read(0x41);	//读取电压char类型数据
+	V_RD1/=51.0;					//char转换为实际电压
+	if(V_RD1<=0.5) light=1;		//
+	else light=0;
+	Delay10ms();
+}
+void temperature_read_proc()
+{
+	float temp;
+	if(t_c==1)
+	{
+		t_c=0;
+		temp=temperature_read();
+		Delay10ms();
+		if(temp>0) temperature=temp;
+		if(temp<=0)
+		{
+			t_n++;
+			if(t_n==3) temperature=temp;
+		}
+	}
+}
+void Timer0_Init(void)		//1000微秒@12.000MHz
+{
+	AUXR &= 0x7F;			//定时器时钟12T模式
+	TMOD &= 0xF0;			//设置定时器模式
+	TL0 = 0x18;				//设置定时初始值
+	TH0 = 0xFC;				//设置定时初始值
+	TF0 = 0;				//清除TF0标志
+	TR0 = 1;				//定时器0开始计时
+	ET0 = 1;
+	EA = 1;
+}
+void seg(unsigned char wale,valu,point)
+{
+	P2=P2&0X1F|0XC0;
+	P0=Seg_Wale[wale];
+	P2=P2&0X1F|0XE0;
+	P0=Seg_Table[16];
+	P2=P2&0X1F|0XC0;
+	P0=Seg_Wale[wale];
+	P2=P2&0X1F|0XE0;
+	P0=Seg_Table[valu];
+	if(point) P0&=0x7f;/0111 1111
+}
+unsigned char key_read()
+{
+	unsigned char i=0;
+	ROW1=ROW2=ROW3=ROW4=1;
+	COL1=0;COL2=COL3=COL4=1;
+	if(ROW4==0) i=4;
+	if(ROW3==0) i=5;
+	COL2=0;COL1=COL3=COL4=1;
+	if(ROW4==0) i=8;
+	if(ROW3==0) i=9;
+	return i;
+}
+void led(unsigned char addr,enable)
+{
+	unsigned char v=0x00,o=0xff;
+	if(enable)
+		v|=0x01<<addr;
+	else
+		v&=~(0x01<<addr);
+	if(o!=v)
+	{
+		P2=P2&0X1F|0X80;
+		P0=~v;
+		o=v;
+	}
+}
+void led_proc()//hour_set,temperature_set,led_set;
+{
+	unsigned char i;
+	if(led_slow) return;
+	led_slow=1;
+	for(i=0;i<2;i++) led_buf[i]=0;
+	
+	if(time[0]>=hour_set) led_buf[0]=1;
+	V_temp=hour_set;
+	for(i=0;i<8;i++)
+	{
+		V_temp++;
+		if((V_temp-10)%16==0) V_temp+=6;
+		if(V_temp>=36) V_temp-=36;
+	}
+	if(time[0]<=V_temp) led_buf[0]=1;
+	
+	if(temperature<temperature_set) led_buf[1]=1;
+	
+	for(i=3;i<8;i++) led_buf[i]=0;
+	if(light==1) led_buf[led_set-1]=1;
+	
+}
+void key_proc()
+{
+	if(key_slow) return;
+	key_slow=1;
+	key_val=key_read();
+	key_down=key_val&(key_val^key_old);
+	key_up=~key_val&(key_val^key_old);
+	key_old=key_val;
+	switch(key_down){
+		case 4:
+			show_mod^=1;
+			if(show_mod==0) mod0_s=0;
+			if(show_mod==1) mod1_s=0;
+		break;
+		case 5:
+			if(show_mod==0) mod0_s++;
+			if(show_mod==1) mod1_s++;
+			if(mod0_s>=3) mod0_s=0;
+			if(mod1_s>=3) mod1_s=0;
+		break;
+		case 8:		//-
+			if(show_mod==1)
+			{
+				switch(mod1_s)
+				{
+					case 0:hour_set--;				break;
+					case 1:temperature_set--;	break;
+					case 2:led_set--;				break;
+				}
+				if((hour_set+1)%16==0) hour_set-=6;
+			}
+		break;
+		case 9:		//+
+			if(show_mod==1)
+			{
+				switch(mod1_s)
+				{
+					case 0:hour_set++;				break;
+					case 1:temperature_set++;	break;
+					case 2:led_set++;				break;
+				}
+				if((hour_set-10)%16==0) hour_set+=6;
+			}
+		break;
+	}
+	if(hour_set<=0) hour_set=0;
+	if(hour_set>35) hour_set=35;
+	if(temperature_set<=0) temperature_set=0;
+	if(temperature_set>99) temperature_set=99;
+	if(led_set<=4) led_set=4;
+	if(led_set>8) led_set=8;
+}
+void seg_proc()
+{
+	unsigned char i;
+	if(seg_slow) return;
+	seg_slow=1;
+	for(i=0;i<8;i++) 
+	{seg_buf[i]=16;point_buf[i]=0;}
+	if(show_mod==0) switch(mod0_s){
+		case 0:
+			seg_buf[0]=time[0]/16;
+			seg_buf[1]=time[0]%16;
+			seg_buf[3]=time[1]/16;
+			seg_buf[4]=time[1]%16;
+			seg_buf[6]=time[2]/16;
+			seg_buf[7]=time[2]%16;
+		break;
+		case 1:
+			seg_buf[0]=15;
+			seg_buf[5]=(int)temperature/10%10;
+			seg_buf[6]=(int)temperature%10;
+			point_buf[6]=1;
+			seg_buf[7]=(int)(temperature*10)%10;
+		break;
+		case 2:
+			seg_buf[0]=17;
+//			seg_buf[0]=(int)V_RD1/100%10;
+//			seg_buf[1]=(int)V_RD1/10%10;
+			seg_buf[2]=(int)V_RD1%10;
+			point_buf[2]=1;
+			seg_buf[3]=(int)(V_RD1*100)/10%10;
+			seg_buf[4]=(int)(V_RD1*100)%10;
+			seg_buf[7]=light;
+		break;
+	}
+	if(show_mod==1) switch(mod1_s){
+		case 0:
+			seg_buf[0]=5;
+			seg_buf[1]=4;
+			seg_buf[6]=(int)(hour_set)/16;
+			seg_buf[7]=(int)(hour_set)%16;
+		break;
+		case 1:
+			seg_buf[0]=5;
+			seg_buf[1]=5;
+			seg_buf[6]=(int)temperature_set/10%10;
+			seg_buf[7]=(int)temperature_set%10;
+		break;
+		case 2:
+			seg_buf[0]=5;
+			seg_buf[1]=6;
+			seg_buf[7]=led_set;
+		break;
+	}
+}
+void Timer0_Its(void) interrupt 1
+{
+	if(++temperature_slow==300) 
+	{
+		temperature_slow=0;
+		t_c=1;
+	}
+	if(++index==8) index=0;
+	if(++seg_slow==50) seg_slow=0;
+	if(++key_slow==100) key_slow=0;
+	if(++led_slow==200) led_slow=0;
+	if(++dat_slow==300) dat_slow=0;
+	seg(index,seg_buf[index],point_buf[index]);
+	led(index,led_buf[index]);
+	seg_proc();key_proc();led_proc();
+	
+	if(light!=light_old) Timer_3000=0;
+	if(++Timer_3000==3000)
+	{
+		Timer_3000=0;
+		if(light==0) led_buf[2]=0;
+		if(light==1) led_buf[2]=1;
+	}
+	light_old=light;
+	//temperature_read_proc();
+}
+void system_init()
+{
+	Timer0_Init();
+	time_write(time);
+	P2=P2&0X1F|0X80;
+	P0=0XFF;
+	P2=P2&0X1F|0XA0;
+	P0=0XFF;
+}
+void main()
+{
+	system_init();
+	t_c=1;temperature_read_proc();
+	while(1)
+	{
+		dat_read();
+		temperature_read_proc();
+	}
+}

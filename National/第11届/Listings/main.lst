@@ -1,0 +1,351 @@
+C51 COMPILER V9.59.0.0   MAIN                                                              05/15/2024 23:20:29 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE main.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\main
+                    -.lst) TABS(3) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <STC15F2K60S2.H>
+   2          #include <ds1302.h>
+   3          #include <onewire.h>
+   4          #include <iic.h>
+   5          
+   6          sbit ROW1=P3^0;
+   7          sbit ROW2=P3^1;
+   8          sbit ROW3=P3^2;
+   9          sbit ROW4=P3^3;
+  10          sbit COL1=P4^4;
+  11          sbit COL2=P4^2;
+  12          sbit COL3=P3^5;
+  13          sbit COL4=P3^4;
+  14          
+  15          code unsigned char Seg_Table[] ={
+  16             0xc0,//0
+  17             0xf9,//1
+  18             0xa4,//2
+  19             0xb0,//3
+  20             0x99,//4
+  21             0x92,//5
+  22             0x82,//6
+  23             0xf8,//7
+  24             0x80,//8
+  25             0x90,//9
+  26             0x88,//A
+  27             0x83,//b
+  28             0xc6,//C
+  29             0xa1,//d
+  30             0x86,//E
+  31             0x8e,//F
+  32             0xff,//  16
+  33             0x89//H 17
+  34          };
+  35          code unsigned char Seg_Wale[] = {0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80};
+  36          unsigned int temperature_slow,index,seg_slow,key_slow,led_slow,dat_slow;
+  37          unsigned char  seg_buf[]={16,16,16,16,16,16,16,16},
+  38                         led_buf[]={0,0,0,0,0,0,0,0},
+  39                         point_buf[]={0,0,0,0,0,0,0,0};
+  40          unsigned char key_val,key_old,key_down,key_up;
+  41          unsigned int Timer_3000;
+  42          bit t_c;
+  43                         
+  44          float temperature;
+  45          unsigned char time[]={0x16,0x59,0x50};
+  46          float V_RD1;unsigned char V_temp;
+  47          bit light,light_old; //0-亮 1-暗
+  48          bit t_c;unsigned char t_n;
+  49          
+  50          char  hour_set=23,
+  51                temperature_set=25,
+  52                led_set=4;
+  53          unsigned char  show_mod;            //0-数据 1-参数
+  54          unsigned char  mod0_s,              //0-时间 1-温度 2-亮、暗
+C51 COMPILER V9.59.0.0   MAIN                                                              05/15/2024 23:20:29 PAGE 2   
+
+  55                         mod1_s;              //0-时间 1-温度 2-指示灯
+  56          void Delay10ms(void) //@12.000MHz
+  57          {
+  58   1         unsigned char data i, j;
+  59   1      
+  60   1         i = 117;
+  61   1         j = 184;
+  62   1         do
+  63   1         {
+  64   2            while (--j);
+  65   2         } while (--i);
+  66   1      }
+  67          void dat_read()
+  68          {
+  69   1         if(dat_slow) return;
+  70   1         dat_slow=1;
+  71   1         time_read(time);
+  72   1         V_RD1=voltage_read(0x41);
+  73   1         V_RD1/=51.0;
+  74   1         if(V_RD1<=0.5) light=1;
+  75   1         else light=0;
+  76   1         Delay10ms();
+  77   1      }
+  78          void temperature_read_proc()
+  79          {
+  80   1         float temp;
+  81   1         if(t_c==1)
+  82   1         {
+  83   2            t_c=0;
+  84   2            temp=temperature_read();
+  85   2            Delay10ms();
+  86   2            if(temp>0) temperature=temp;
+  87   2            if(temp<=0)
+  88   2            {
+  89   3               t_n++;
+  90   3               if(t_n==3) temperature=temp;
+  91   3            }
+  92   2         }
+  93   1      }
+  94          void Timer0_Init(void)     //1000微秒@12.000MHz
+  95          {
+  96   1         AUXR &= 0x7F;        //定时器时钟12T模式
+  97   1         TMOD &= 0xF0;        //设置定时器模式
+  98   1         TL0 = 0x18;          //设置定时初始值
+  99   1         TH0 = 0xFC;          //设置定时初始值
+ 100   1         TF0 = 0;          //清除TF0标志
+ 101   1         TR0 = 1;          //定时器0开始计时
+ 102   1         ET0 = 1;
+ 103   1         EA = 1;
+ 104   1      }
+ 105          void seg(unsigned char wale,valu,point)
+ 106          {
+ 107   1         P2=P2&0X1F|0XC0;
+ 108   1         P0=Seg_Wale[wale];
+ 109   1         P2=P2&0X1F|0XE0;
+ 110   1         P0=Seg_Table[16];
+ 111   1         P2=P2&0X1F|0XC0;
+ 112   1         P0=Seg_Wale[wale];
+ 113   1         P2=P2&0X1F|0XE0;
+ 114   1         P0=Seg_Table[valu];
+ 115   1         if(point) 
+ 116   1            P0&=0x7f;
+C51 COMPILER V9.59.0.0   MAIN                                                              05/15/2024 23:20:29 PAGE 3   
+
+ 117   1      }
+ 118          unsigned char key_read()
+ 119          {
+ 120   1         unsigned char i=0;
+ 121   1         ROW1=ROW2=ROW3=ROW4=1;
+ 122   1         COL1=0;COL2=COL3=COL4=1;
+ 123   1         if(ROW4==0) i=4;
+ 124   1         if(ROW3==0) i=5;
+ 125   1         COL2=0;COL1=COL3=COL4=1;
+ 126   1         if(ROW4==0) i=8;
+ 127   1         if(ROW3==0) i=9;
+ 128   1         return i;
+ 129   1      }
+ 130          void led(unsigned char addr,enable)
+ 131          {
+ 132   1         unsigned char v=0x00,o=0xff;
+ 133   1         if(enable)
+ 134   1            v|=0x01<<addr;
+ 135   1         else
+ 136   1            v&=~(0x01<<addr);
+ 137   1         if(o!=v)
+ 138   1         {
+ 139   2            P2=P2&0X1F|0X80;
+ 140   2            P0=~v;
+ 141   2            o=v;
+ 142   2         }
+ 143   1      }
+ 144          void led_proc()//hour_set,temperature_set,led_set;
+ 145          {
+ 146   1         unsigned char i;
+ 147   1         if(led_slow) return;
+ 148   1         led_slow=1;
+ 149   1         for(i=0;i<2;i++) led_buf[i]=0;
+ 150   1         
+ 151   1         if(time[0]>=hour_set) led_buf[0]=1;
+ 152   1         V_temp=hour_set;
+ 153   1         for(i=0;i<8;i++)
+ 154   1         {
+ 155   2            V_temp++;
+ 156   2            if((V_temp-10)%16==0) V_temp+=6;
+ 157   2            if(V_temp>=36) V_temp-=36;
+ 158   2         }
+ 159   1         if(time[0]<=V_temp) led_buf[0]=1;
+ 160   1         
+ 161   1         if(temperature<temperature_set) led_buf[1]=1;
+ 162   1         
+ 163   1         for(i=3;i<8;i++) led_buf[i]=0;
+ 164   1         if(light==1) led_buf[led_set-1]=1;
+ 165   1         
+ 166   1      }
+ 167          void key_proc()
+ 168          {
+ 169   1         if(key_slow) return;
+ 170   1         key_slow=1;
+ 171   1         key_val=key_read();
+ 172   1         key_down=key_val&(key_val^key_old);
+ 173   1         key_up=~key_val&(key_val^key_old);
+ 174   1         key_old=key_val;
+ 175   1         switch(key_down){
+ 176   2            case 4:
+ 177   2               show_mod^=1;
+ 178   2               if(show_mod==0) mod0_s=0;
+C51 COMPILER V9.59.0.0   MAIN                                                              05/15/2024 23:20:29 PAGE 4   
+
+ 179   2               if(show_mod==1) mod1_s=0;
+ 180   2            break;
+ 181   2            case 5:
+ 182   2               if(show_mod==0) mod0_s++;
+ 183   2               if(show_mod==1) mod1_s++;
+ 184   2               if(mod0_s>=3) mod0_s=0;
+ 185   2               if(mod1_s>=3) mod1_s=0;
+ 186   2            break;
+ 187   2            case 8:     //-
+ 188   2               if(show_mod==1)
+ 189   2               {
+ 190   3                  switch(mod1_s)
+ 191   3                  {
+ 192   4                     case 0:hour_set--;            break;
+ 193   4                     case 1:temperature_set--;  break;
+ 194   4                     case 2:led_set--;          break;
+ 195   4                  }
+ 196   3                  if((hour_set+1)%16==0) hour_set-=6;
+ 197   3               }
+ 198   2            break;
+ 199   2            case 9:     //+
+ 200   2               if(show_mod==1)
+ 201   2               {
+ 202   3                  switch(mod1_s)
+ 203   3                  {
+ 204   4                     case 0:hour_set++;            break;
+ 205   4                     case 1:temperature_set++;  break;
+ 206   4                     case 2:led_set++;          break;
+ 207   4                  }
+ 208   3                  if((hour_set-10)%16==0) hour_set+=6;
+ 209   3               }
+ 210   2            break;
+ 211   2         }
+ 212   1         if(hour_set<=0) hour_set=0;
+ 213   1         if(hour_set>35) hour_set=35;
+ 214   1         if(temperature_set<=0) temperature_set=0;
+ 215   1         if(temperature_set>99) temperature_set=99;
+ 216   1         if(led_set<=4) led_set=4;
+ 217   1         if(led_set>8) led_set=8;
+ 218   1      }
+ 219          void seg_proc()
+ 220          {
+ 221   1         unsigned char i;
+ 222   1         if(seg_slow) return;
+ 223   1         seg_slow=1;
+ 224   1         for(i=0;i<8;i++) 
+ 225   1         {seg_buf[i]=16;point_buf[i]=0;}
+ 226   1         if(show_mod==0) switch(mod0_s){
+ 227   2            case 0:
+ 228   2               seg_buf[0]=time[0]/16;
+ 229   2               seg_buf[1]=time[0]%16;
+ 230   2               seg_buf[3]=time[1]/16;
+ 231   2               seg_buf[4]=time[1]%16;
+ 232   2               seg_buf[6]=time[2]/16;
+ 233   2               seg_buf[7]=time[2]%16;
+ 234   2            break;
+ 235   2            case 1:
+ 236   2               seg_buf[0]=15;
+ 237   2               seg_buf[5]=(int)temperature/10%10;
+ 238   2               seg_buf[6]=(int)temperature%10;
+ 239   2               point_buf[6]=1;
+ 240   2               seg_buf[7]=(int)(temperature*10)%10;
+C51 COMPILER V9.59.0.0   MAIN                                                              05/15/2024 23:20:29 PAGE 5   
+
+ 241   2            break;
+ 242   2            case 2:
+ 243   2               seg_buf[0]=17;
+ 244   2      //       seg_buf[0]=(int)V_RD1/100%10;
+ 245   2      //       seg_buf[1]=(int)V_RD1/10%10;
+ 246   2               seg_buf[2]=(int)V_RD1%10;
+ 247   2               point_buf[2]=1;
+ 248   2               seg_buf[3]=(int)(V_RD1*100)/10%10;
+ 249   2               seg_buf[4]=(int)(V_RD1*100)%10;
+ 250   2               seg_buf[7]=light;
+ 251   2            break;
+ 252   2         }
+ 253   1         if(show_mod==1) switch(mod1_s){
+ 254   2            case 0:
+ 255   2               seg_buf[0]=5;
+ 256   2               seg_buf[1]=4;
+ 257   2               seg_buf[6]=(int)(hour_set)/16;
+ 258   2               seg_buf[7]=(int)(hour_set)%16;
+ 259   2            break;
+ 260   2            case 1:
+ 261   2               seg_buf[0]=5;
+ 262   2               seg_buf[1]=5;
+ 263   2               seg_buf[6]=(int)temperature_set/10%10;
+ 264   2               seg_buf[7]=(int)temperature_set%10;
+ 265   2            break;
+ 266   2            case 2:
+ 267   2               seg_buf[0]=5;
+ 268   2               seg_buf[1]=6;
+ 269   2               seg_buf[7]=led_set;
+ 270   2            break;
+ 271   2         }
+ 272   1      }
+ 273          void Timer0_Its(void) interrupt 1
+ 274          {
+ 275   1         if(++temperature_slow==300) 
+ 276   1         {
+ 277   2            temperature_slow=0;
+ 278   2            t_c=1;
+ 279   2         }
+ 280   1         if(++index==8) index=0;
+ 281   1         if(++seg_slow==50) seg_slow=0;
+ 282   1         if(++key_slow==100) key_slow=0;
+ 283   1         if(++led_slow==200) led_slow=0;
+ 284   1         if(++dat_slow==300) dat_slow=0;
+ 285   1         seg(index,seg_buf[index],point_buf[index]);
+ 286   1         led(index,led_buf[index]);
+ 287   1         seg_proc();key_proc();led_proc();
+ 288   1         
+ 289   1         if(light!=light_old) Timer_3000=0;
+ 290   1         if(++Timer_3000==3000)
+ 291   1         {
+ 292   2            Timer_3000=0;
+ 293   2            if(light==0) led_buf[2]=0;
+ 294   2            if(light==1) led_buf[2]=1;
+ 295   2         }
+ 296   1         light_old=light;
+ 297   1         //temperature_read_proc();
+ 298   1      }
+ 299          void system_init()
+ 300          {
+ 301   1         Timer0_Init();
+ 302   1         time_write(time);
+C51 COMPILER V9.59.0.0   MAIN                                                              05/15/2024 23:20:29 PAGE 6   
+
+ 303   1         P2=P2&0X1F|0X80;
+ 304   1         P0=0XFF;
+ 305   1         P2=P2&0X1F|0XA0;
+ 306   1         P0=0XFF;
+ 307   1      }
+ 308          void main()
+ 309          {
+ 310   1         system_init();
+ 311   1         t_c=1;temperature_read_proc();
+ 312   1         while(1)
+ 313   1         {
+ 314   2            dat_read();
+ 315   2            temperature_read_proc();
+ 316   2         }
+ 317   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1655    ----
+   CONSTANT SIZE    =     26    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     61       5
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      3    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
