@@ -1,0 +1,483 @@
+C51 COMPILER V9.59.0.0   MAIN                                                              05/14/2024 22:09:30 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE main.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\main
+                    -.lst) TABS(3) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <STC15F2K60S2.H>
+   2          #include <onewire.h>
+   3          #include <intrins.h>
+   4          #include <iic.h>
+   5          #include <stdio.h>
+   6          
+   7          sbit US_TX=P1^0;
+   8          sbit US_RX=P1^1;
+   9          
+  10          sbit ROW1=P3^0;
+  11          sbit ROW2=P3^1;
+  12          sbit ROW3=P3^2;
+  13          sbit ROW4=P3^3;
+  14          sbit COL1=P4^4;
+  15          sbit COL2=P4^2;
+  16          sbit COL3=P3^5;
+  17          sbit COL4=P3^4;
+  18          
+  19          code unsigned char Seg_Table[] =
+  20          {
+  21             0xc0,//0
+  22             0xf9,//1
+  23             0xa4,//2
+  24             0xb0,//3
+  25             0x99,//4
+  26             0x92,//5
+  27             0x82,//6
+  28             0xf8,//7
+  29             0x80,//8
+  30             0x90,//9
+  31             0x88,//A
+  32             0x83,//b
+  33             0xc6,//C
+  34             0xa1,//d
+  35             0x86,//E
+  36             0x8e,//F
+  37             0xff,// 16
+  38             0xc7,//L 17
+  39             0x8c//P 18
+  40          };
+  41          code unsigned char Seg_Wale[] = {0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80};
+  42          unsigned char index,seg_buf[]={16,16,16,16,16,16,16,16},point_buf[]={0,0,0,0,0,0,0,0};
+  43          xdata unsigned char led_slow,Uart_slwo,dat_slow,seg_slow,key_slow,led_buf[]={0,0,0,0,0,0,0,0};
+  44          unsigned char key_val,key_old,key_down,key_up;
+  45          unsigned int Timer_1000;
+  46          bit T1000_con,DAC_Con;
+  47          unsigned char T1000_flag;//12-12 13-13
+  48          
+  49          float te,temperature;
+  50          float destance;
+  51          xdata unsigned char eeprom_save[5];//0-温参 1-距参 2,3,4-change_num 
+  52          xdata unsigned char Uart_Recv[10];
+  53          xdata unsigned char Uart_Revc_Index;
+  54          xdata unsigned char Uart_Send[10];
+C51 COMPILER V9.59.0.0   MAIN                                                              05/14/2024 22:09:30 PAGE 2   
+
+  55          xdata unsigned char V_out;
+  56          
+  57          xdata int temperature_set=30,destance_set=35;
+  58          unsigned char temperature_set_old,destance_set_old;
+  59          unsigned char seg_mod;//0-数据 1-参数 
+  60          unsigned char mod0_set;//0-温度 1-距离 2-变更次数
+  61          unsigned char mod1_set;//0-温度 1-距离
+  62          unsigned int change_num=12345;
+  63          
+  64          void send_byte(unsigned char dat)
+  65          {
+  66   1         SBUF=dat;
+  67   1         while(TI==0);
+  68   1         TI=0;
+  69   1      }
+  70          void send_string(unsigned char *dat)
+  71          {
+  72   1         while(*dat!='\0')
+  73   1            send_byte(*dat++);
+  74   1      }
+  75          void Delay20ms(void) //@20.000MHz
+  76          {
+  77   1         unsigned char data i, j, k;
+  78   1      
+  79   1         _nop_();
+  80   1         _nop_();
+  81   1         i = 2;
+  82   1         j = 134;
+  83   1         k = 20;
+  84   1         do
+  85   1         {
+  86   2            do
+  87   2            {
+  88   3               while (--k);
+  89   3            } while (--j);
+  90   2         } while (--i);
+  91   1      }
+  92          void Delay20us(void) //@20.000MHz
+  93          {
+  94   1         unsigned char data i;
+  95   1      
+  96   1         _nop_();
+  97   1         _nop_();
+  98   1         i = 97;
+  99   1         while (--i);
+ 100   1      }
+ 101          void us_wale(void)
+ 102          {
+ 103   1         unsigned char i;
+ 104   1         for(i=0;i<10;i++)
+ 105   1         {
+ 106   2            US_TX=1;Delay20us();
+ 107   2            US_TX=0;
+ 108   2         }
+ 109   1      }
+ 110          void UartInit(void)     //4800bps@12.000MHz
+ 111          {
+ 112   1         SCON = 0x50;      //8位数据,可变波特率
+ 113   1         AUXR |= 0x01;     //串口1选择定时器2为波特率发生器
+ 114   1         AUXR &= 0xFB;     //定时器2时钟为Fosc/12,即12T
+ 115   1         T2L = 0xCC;    //设定定时初值
+ 116   1         T2H = 0xFF;    //设定定时初值
+C51 COMPILER V9.59.0.0   MAIN                                                              05/14/2024 22:09:30 PAGE 3   
+
+ 117   1         AUXR |= 0x10;     //启动定时器2
+ 118   1         ES = 1;
+ 119   1         EA = 1;
+ 120   1      }
+ 121          void us_read(void)
+ 122          {
+ 123   1         TMOD &= 0x0F;     //设置定时器模式
+ 124   1         TH1=TL1=0;
+ 125   1         us_wale();
+ 126   1         TR1=1;
+ 127   1         while(US_RX==1&&TF1==0);
+ 128   1         TR1=0;
+ 129   1         if(TF1==1)
+ 130   1         {
+ 131   2            TF1=0;
+ 132   2            destance=0;
+ 133   2         }
+ 134   1         else 
+ 135   1            destance=((TH1<<8)|TL1)*0.017;
+ 136   1         
+ 137   1      }
+ 138          void Timer0_Init(void)     //1000微秒@12.000MHz
+ 139          {
+ 140   1         AUXR &= 0x7F;        //定时器时钟12T模式
+ 141   1         TMOD &= 0xF0;        //设置定时器模式
+ 142   1         TL0 = 0x18;          //设置定时初始值
+ 143   1         TH0 = 0xFC;          //设置定时初始值
+ 144   1         TF0 = 0;          //清除TF0标志
+ 145   1         TR0 = 1;          //定时器0开始计时
+ 146   1         ET0 = 1;
+ 147   1         EA = 1;
+ 148   1      }
+ 149          void seg(unsigned char wale,valu,point)
+ 150          {
+ 151   1         P2=P2&0x1f|0xc0;
+ 152   1         P0=Seg_Wale[wale];
+ 153   1         P2=P2&0x1f|0xe0;
+ 154   1         P0=Seg_Table[16];
+ 155   1         P2=P2&0x1f|0xc0;
+ 156   1         P0=Seg_Wale[wale];
+ 157   1         P2=P2&0x1f|0xe0;
+ 158   1         P0=Seg_Table[valu];
+ 159   1         if(point) P0&=~0x80;
+ 160   1      }
+ 161          void led(unsigned char addr,enable)
+ 162          {
+ 163   1         unsigned char val=0x00,old=0xff;
+ 164   1         if(enable) 
+ 165   1            val|=0x01<<addr;
+ 166   1         else  
+ 167   1            val&=~(0x01<<addr);
+ 168   1         if(old!=val)
+ 169   1         {
+ 170   2            P2=P2&0x1f|0x80;
+ 171   2            P0=~val;
+ 172   2            P2=P2&0x1f;
+ 173   2            old=val;
+ 174   2         }
+ 175   1      }
+ 176          unsigned char key(void)
+ 177          {
+ 178   1         unsigned char temp=0;
+C51 COMPILER V9.59.0.0   MAIN                                                              05/14/2024 22:09:30 PAGE 4   
+
+ 179   1         ROW1=ROW2=ROW3=ROW4=1;
+ 180   1         COL3=0;COL1=COL2=COL4=1;
+ 181   1         if(ROW4==0) temp=12;
+ 182   1         if(ROW3==0) temp=13;
+ 183   1         COL4=0;COL1=COL2=COL3=1;
+ 184   1         if(ROW4==0) temp=16;
+ 185   1         if(ROW3==0) temp=17;
+ 186   1         return temp;
+ 187   1      }
+ 188          void Eeprom_Init(void)
+ 189          {
+ 190   1         eeproom_read(eeprom_save,1,5);
+ 191   1         Delay20ms();
+ 192   1         
+ 193   1         temperature_set=eeprom_save[0];
+ 194   1         destance_set=eeprom_save[1];
+ 195   1         
+ 196   1         change_num=0;
+ 197   1         change_num+=eeprom_save[2]*10000;
+ 198   1         change_num+=eeprom_save[3]*100;
+ 199   1         change_num+=eeprom_save[4];
+ 200   1      }
+ 201          void Eeprom_Write(void)
+ 202          {
+ 203   1         unsigned char temp;
+ 204   1         eeprom_save[0]=temperature_set;
+ 205   1         eeprom_save[1]=destance_set;
+ 206   1         temp =change_num/10000%10;
+ 207   1         eeprom_save[2]=temp;
+ 208   1         temp =change_num/1000%10*10;
+ 209   1         temp+=change_num/100%10;
+ 210   1         eeprom_save[3]=temp;
+ 211   1         temp =change_num/10%10*10;
+ 212   1         temp+=change_num%10;
+ 213   1         eeprom_save[4]=temp;
+ 214   1         eeproom_write(eeprom_save,1,5);
+ 215   1         Delay20ms();
+ 216   1      }
+ 217          void set_limit(void)
+ 218          {
+ 219   1         if(temperature_set<=0) temperature_set=0;
+ 220   1         if(destance_set<=0) destance_set=0;
+ 221   1         if(temperature_set>=100) temperature_set=99;
+ 222   1         if(destance_set>=100) destance_set=99;
+ 223   1      }
+ 224          void led_proc(void)
+ 225          {
+ 226   1         unsigned char i;
+ 227   1         if(led_slow) return;
+ 228   1         led_slow=0;
+ 229   1         for(i=0;i<8;i++) led_buf[i]=0;
+ 230   1         
+ 231   1         if(temperature_set<=temperature) led_buf[0]=1;
+ 232   1         if(destance_set<=destance) led_buf[1]=1;
+ 233   1         
+ 234   1         if(destance<=destance_set) 
+ 235   1            V_out=2;
+ 236   1         if(destance>destance_set)
+ 237   1            V_out=5;
+ 238   1         
+ 239   1          led_buf[2]=DAC_Con;
+ 240   1      }
+C51 COMPILER V9.59.0.0   MAIN                                                              05/14/2024 22:09:30 PAGE 5   
+
+ 241          void key_proc(void)
+ 242          {
+ 243   1         if(key_slow) return;
+ 244   1         key_slow=1;
+ 245   1         key_val=key();
+ 246   1         key_down=key_val&(key_val^key_old);
+ 247   1         key_up=~key_val&(key_val^key_old);
+ 248   1         key_old=key_val;
+ 249   1         
+ 250   1         switch(key_down)
+ 251   1         {
+ 252   2            case 13:
+ 253   2               T1000_flag=13;
+ 254   2               T1000_con=1;
+ 255   2               seg_mod^=1;
+ 256   2               mod0_set=mod1_set=0;
+ 257   2               if(seg_mod==1)
+ 258   2               {
+ 259   3                  temperature_set_old=temperature_set;
+ 260   3                  destance_set_old=destance_set;
+ 261   3               }
+ 262   2               if(seg_mod==0)
+ 263   2               {
+ 264   3                  if(temperature_set_old!= temperature_set||destance_set_old!=destance_set)
+ 265   3                     change_num++;
+ 266   3               }
+ 267   2               Eeprom_Write();
+ 268   2            break;
+ 269   2            case 12:
+ 270   2               T1000_flag=12;
+ 271   2               T1000_con=1;
+ 272   2               if(seg_mod==0) mod0_set++;
+ 273   2               if(seg_mod==1) mod1_set++;
+ 274   2               if(mod0_set>=3) mod0_set=0;
+ 275   2               if(mod1_set>=2) mod1_set=0;
+ 276   2            break;
+ 277   2            case 16:
+ 278   2               if(seg_mod==1)
+ 279   2               {
+ 280   3                  if(mod1_set==0) {temperature_set-=2;}
+ 281   3                  if(mod1_set==1) {destance_set-=5;}
+ 282   3               }
+ 283   2            break;
+ 284   2            case 17:
+ 285   2               if(seg_mod==1)
+ 286   2               {
+ 287   3                  if(mod1_set==0) {temperature_set+=2;}
+ 288   3                  if(mod1_set==1) {destance_set+=5;}
+ 289   3               }
+ 290   2            break;
+ 291   2         }
+ 292   1         set_limit();
+ 293   1         if(key_up==12) {T1000_con=0;T1000_flag=0;}
+ 294   1         if(key_up==13) {T1000_con=0;T1000_flag=0;}
+ 295   1      }
+ 296          void seg_proc(void)
+ 297          {
+ 298   1         unsigned char i;
+ 299   1         if(seg_slow) return;
+ 300   1         seg_slow=1;
+ 301   1         
+ 302   1         for(i=0;i<8;i++) {
+C51 COMPILER V9.59.0.0   MAIN                                                              05/14/2024 22:09:30 PAGE 6   
+
+ 303   2            seg_buf[i]=16;
+ 304   2            point_buf[i]=0;}
+ 305   1            if(seg_mod==0) switch(mod0_set){
+ 306   2               case 0:
+ 307   2                  seg_buf[0]=15;
+ 308   2                  seg_buf[4]=(int)temperature/10%10;
+ 309   2                  seg_buf[5]=(int)temperature%10;
+ 310   2                  point_buf[5]=1;
+ 311   2                  seg_buf[6]=(int)(temperature*100)/10%10;
+ 312   2                  seg_buf[7]=(int)(temperature*100)%10;
+ 313   2               break;
+ 314   2               case 1:
+ 315   2                  seg_buf[0]=17;
+ 316   2                  seg_buf[5]=(int)destance/100%10;
+ 317   2                  seg_buf[6]=(int)destance/10%10;
+ 318   2                  seg_buf[7]=(int)destance%10;
+ 319   2               break;
+ 320   2               case 2:
+ 321   2                  seg_buf[0]=0;
+ 322   2                  if(change_num>=10000) seg_buf[3]=change_num/10000%10;
+ 323   2                  if(change_num>=1000) seg_buf[4]=change_num/1000%10;
+ 324   2                  if(change_num>=100) seg_buf[5]=change_num/100%10;
+ 325   2                  if(change_num>=10) seg_buf[6]=change_num/10%10;
+ 326   2                  if(change_num>=0) seg_buf[7]=change_num%10;
+ 327   2               break;}
+ 328   1            if(seg_mod==1) switch(mod1_set){
+ 329   2               case 0:
+ 330   2                  seg_buf[0]=18;
+ 331   2                  seg_buf[6]=temperature_set/10%10;
+ 332   2                  seg_buf[7]=temperature_set%10;
+ 333   2               break;
+ 334   2               case 1:
+ 335   2                  seg_buf[0]=5;
+ 336   2                  seg_buf[6]=destance_set/10%10;
+ 337   2                  seg_buf[7]=destance_set%10;
+ 338   2               break;
+ 339   2            }
+ 340   1      }
+ 341          void uart_proc(void)
+ 342          {
+ 343   1         float dat1,dat2;
+ 344   1         if(Uart_slwo) return;
+ 345   1         Uart_slwo=1;
+ 346   1         
+ 347   1         if(Uart_Revc_Index==6)
+ 348   1         { 
+ 349   2            if(Uart_Recv[0]==0X53 && Uart_Recv[1]== 0X54
+ 350   2            && Uart_Recv[2]==0X5C && Uart_Recv[3]==0X72
+ 351   2            && Uart_Recv[4]==0X5C && Uart_Recv[5]==0X6E)
+ 352   2            {
+ 353   3               dat1=temperature;
+ 354   3               dat2=destance;
+ 355   3               sprintf(Uart_Send,"$%02d,%.2f\r\n",(unsigned int)dat2,dat1);
+ 356   3               send_string(Uart_Send);
+ 357   3            }
+ 358   2            else send_string("ERROR\r\n");
+ 359   2            Uart_Revc_Index=0;
+ 360   2         }
+ 361   1         
+ 362   1         if(Uart_Revc_Index==8)
+ 363   1         {
+ 364   2            if(Uart_Recv[0]=='P' && Uart_Recv[1]=='A' 
+C51 COMPILER V9.59.0.0   MAIN                                                              05/14/2024 22:09:30 PAGE 7   
+
+ 365   2            && Uart_Recv[2]=='R' && Uart_Recv[3]=='A'
+ 366   2            && Uart_Recv[4]==0X5C && Uart_Recv[5]=='r'
+ 367   2            && Uart_Recv[6]==0X5C && Uart_Recv[7]=='n')
+ 368   2            {
+ 369   3               sprintf(Uart_Send,"#%02d,%02d\r\n",(unsigned int)destance_set,(unsigned int)temperature_set);
+ 370   3               send_string(Uart_Send);
+ 371   3            }
+ 372   2            else send_string("ERROR\r\n");
+ 373   2            Uart_Revc_Index=0;
+ 374   2         }
+ 375   1      }
+ 376          void Timer0_Isr(void) interrupt 1
+ 377          {
+ 378   1         if(++led_slow==100) led_slow=0;
+ 379   1         if(++dat_slow==1000) dat_slow=0;
+ 380   1         if(++Uart_slwo==100) Uart_slwo=0;
+ 381   1         if(++seg_slow==50) seg_slow=0;
+ 382   1         if(++key_slow==100) key_slow=0;
+ 383   1         if(++index==8) index=0;
+ 384   1         seg(index,seg_buf[index],point_buf[index]);
+ 385   1         led(index,led_buf[index]);
+ 386   1         key_proc();seg_proc();led_proc();uart_proc();
+ 387   1         if(T1000_con==1)
+ 388   1         {
+ 389   2            if(++Timer_1000==1000)
+ 390   2            {
+ 391   3               Timer_1000=0;
+ 392   3               if(T1000_flag==12)
+ 393   3               {
+ 394   4                  T1000_flag=0;
+ 395   4                  change_num=0;
+ 396   4                  Eeprom_Write();
+ 397   4               }
+ 398   3               if(T1000_flag==13)
+ 399   3               {
+ 400   4                  T1000_flag=0;
+ 401   4                  DAC_Con^=1;
+ 402   4               }
+ 403   3            }
+ 404   2         }
+ 405   1      }
+ 406          void system_init()
+ 407          {
+ 408   1         UartInit();
+ 409   1         Timer0_Init();
+ 410   1         P2=P2&0x1f|0x80;
+ 411   1         P0=0xff;
+ 412   1         P2=P2&0x1f|0xa0;
+ 413   1         P0=0x00;
+ 414   1         P2=P2&0x1f;
+ 415   1      }
+ 416          void dat_read(void)
+ 417          { 
+ 418   1         if(dat_slow) return;
+ 419   1         dat_slow=1;
+ 420   1         
+ 421   1         temperature=Temp_Read();
+ 422   1         us_read();
+ 423   1         if(DAC_Con) da_out(V_out*51);
+ 424   1         else da_out(0*51);
+ 425   1      }
+ 426          void main()
+C51 COMPILER V9.59.0.0   MAIN                                                              05/14/2024 22:09:30 PAGE 8   
+
+ 427          {  
+ 428   1         Eeprom_Init();
+ 429   1         system_init();
+ 430   1            dat_read();
+ 431   1         while(1)
+ 432   1         {
+ 433   2            dat_read();
+ 434   2         }
+ 435   1      }
+ 436          
+ 437          void Uart1_Isr(void) interrupt 4
+ 438          {
+ 439   1         if (RI)           //检测串口1接收中断
+ 440   1         {  
+ 441   2            Uart_Recv[Uart_Revc_Index]=SBUF;
+ 442   2            Uart_Revc_Index++;
+ 443   2            RI=0;       //清除串口1接收中断请求位
+ 444   2         }
+ 445   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   2276    ----
+   CONSTANT SIZE    =     61    ----
+   XDATA SIZE       =     44    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     43       7
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      2    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
