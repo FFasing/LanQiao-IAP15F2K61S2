@@ -1,0 +1,321 @@
+C51 COMPILER V9.59.0.0   MAIN                                                              04/04/2024 14:35:02 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: E:\keil5\C51\BIN\C51.EXE main.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\main.l
+                    -st) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <STC15F2K60S2.H>
+   2          #include <onewire.h>
+   3          #include <ds1302.h>
+   4          
+   5          sbit ROW1 = P3^0;
+   6          sbit ROW2 = P3^1;
+   7          sbit ROW3 = P3^2;
+   8          sbit ROW4 = P3^3;
+   9          sbit COL1 = P4^4;
+  10          sbit COL2 = P4^2;
+  11          sbit COL3 = P3^5;
+  12          sbit COL4 = P3^4;
+  13          
+  14          code unsigned char Seg_Table[] =
+  15          {
+  16          0xc0,//0
+  17          0xf9,//1
+  18          0xa4,//2
+  19          0xb0,//3
+  20          0x99,//4
+  21          0x92,//5
+  22          0x82,//6
+  23          0xf8,//7
+  24          0x80,//8
+  25          0x90,//9
+  26          0xff,//10
+  27          0xc1,//11 U
+  28          0xbf,//12 -
+  29          0x88,//A
+  30          0x83,//b
+  31          0xc6,//C
+  32          0xa1,//d
+  33          0x86,//E
+  34          0x8e//F
+  35          };
+  36          code unsigned char Seg_Wale[] = {0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80};
+  37          unsigned char seg_show_mod=0;           //0-温度 1-时间h/m 2-参数 3-m/s
+  38          unsigned char Time[3]={0x00,0x59,0x58}; //time
+  39          unsigned int T_compare=23;                              //温度参数
+  40          bit work_mod=0;                                         //0-温度控制 1-时间控制
+  41          unsigned char point_bus[]={0,0,0,0,0,0,0,0};
+  42          unsigned char led_bus[]={0,0,0,0,0,0,0,0};
+  43          unsigned char seg_bus[]={10,10,10,10,10,10,10,10};
+  44          unsigned char seg_index,seg_slow_down,key_slow_down;
+  45          unsigned char key_val,key_old,key_up,key_down;
+  46          float Temperature;
+  47          float T_show;
+  48          unsigned int Timer_5000,Timer_50;
+  49          bit Time_5s_con,Time_1ms_con;
+  50          bit Relay_con=0;
+  51          unsigned char h_old,h_val;
+  52          
+  53          void Relay(unsigned char enable)
+  54          {
+C51 COMPILER V9.59.0.0   MAIN                                                              04/04/2024 14:35:02 PAGE 2   
+
+  55   1              unsigned char temp=0x00,temp_old=0xff;
+  56   1              if(enable)
+  57   1                      temp |= 0x10;
+  58   1              else
+  59   1                      temp &=~ 0x10;
+  60   1              if(temp!=temp_old)
+  61   1              {
+  62   2              P2 = P2 & 0x1f |0xa0;
+  63   2              P0 = temp;
+  64   2              P2 = P2 & 0x1f;
+  65   2              temp_old=temp;
+  66   2              }
+  67   1      }
+  68          void led(unsigned char addr,enable)
+  69          {
+  70   1              unsigned char  temp=0x00,temp_old=0xff;
+  71   1              if(enable)
+  72   1                      temp |= 0x01<<addr;
+  73   1              else
+  74   1                      temp &=~(0x01<<addr);
+  75   1              if(temp!=temp_old)
+  76   1              {
+  77   2              P2 = P2 & 0x1f |0x80;
+  78   2              P0 =~temp;
+  79   2              P2 = P2 & 0x1f;
+  80   2              temp_old=temp;
+  81   2              }
+  82   1      }
+  83          void led_proc()
+  84          {
+  85   1              if(h_val!=h_old)
+  86   1              {
+  87   2                      Time_5s_con=1;
+  88   2                      h_old=h_val;
+  89   2              }
+  90   1              else if(work_mod==0)
+  91   1              {
+  92   2                      Relay_con=0;
+  93   2                      if(T_compare<T_show)
+  94   2                              Relay_con=1;
+  95   2              }
+  96   1              
+  97   1              if(work_mod==0) led_bus[1]=1;
+  98   1              else led_bus[1]=0;
+  99   1              
+ 100   1              if(Relay_con==1) Time_1ms_con=1;
+ 101   1              else 
+ 102   1                      {
+ 103   2                              Time_1ms_con=0;
+ 104   2                              led_bus[2]=0;
+ 105   2                      }
+ 106   1      }
+ 107          void system_init()
+ 108          {
+ 109   1              P2 = P2 & 0x1f |0x80;
+ 110   1              P0 = 0xff;
+ 111   1              P2 = P2 & 0x1f |0xa0;
+ 112   1              P0 = 0x00;
+ 113   1              P2 = P2 & 0x1f;
+ 114   1      }
+ 115          void seg(unsigned char wale,valu,point)
+ 116          {
+C51 COMPILER V9.59.0.0   MAIN                                                              04/04/2024 14:35:02 PAGE 3   
+
+ 117   1              P2 = P2 & 0x1f |0xc0;
+ 118   1              P0 = Seg_Wale[wale];
+ 119   1              P2 = P2 & 0x1f |0xe0;
+ 120   1              P0 = Seg_Table[10];
+ 121   1              
+ 122   1              P2 = P2 & 0x1f |0xc0;
+ 123   1              P0 = Seg_Wale[wale];
+ 124   1              P2 = P2 & 0x1f |0xe0;
+ 125   1              P0 = 0xff;
+ 126   1              if(point) 
+ 127   1                      P0 &= 0x7f;
+ 128   1              P0 &= Seg_Table[valu];
+ 129   1              P2 = P2 & 0x1f;
+ 130   1      }
+ 131          void Timer0Init(void)           //1毫秒@12.000MHz
+ 132          {
+ 133   1              AUXR &= 0x7F;           //定时器时钟12T模式
+ 134   1              TMOD &= 0xF0;           //设置定时器模式
+ 135   1              TL0 = 0x18;             //设置定时初值
+ 136   1              TH0 = 0xFC;             //设置定时初值
+ 137   1              TF0 = 0;                //清除TF0标志
+ 138   1              TR0 = 1;                //定时器0开始计时
+ 139   1              ET0 = 1;
+ 140   1              EA = 1;
+ 141   1      }
+ 142          unsigned char key_read()
+ 143          {
+ 144   1              unsigned char temp=0;
+ 145   1              ROW1=ROW2=ROW3=ROW4=1;
+ 146   1              COL3=0;COL1=COL2=COL4=1;
+ 147   1              if(ROW4==0) temp=12;
+ 148   1              if(ROW3==0) temp=13;
+ 149   1              ROW1=ROW2=ROW3=ROW4=1;
+ 150   1              COL4=0;COL1=COL2=COL3=1;
+ 151   1              if(ROW4==0) temp=16;
+ 152   1              if(ROW3==0) temp=17;
+ 153   1              return temp;
+ 154   1      }
+ 155          void key_proc()
+ 156          {
+ 157   1              if(key_slow_down) return;
+ 158   1              key_slow_down=1;
+ 159   1              
+ 160   1              key_val=key_read();
+ 161   1              key_down=key_val&(key_val^key_old);
+ 162   1              key_up=~key_val&(key_val^key_old);
+ 163   1              key_old=key_val;
+ 164   1              
+ 165   1              switch(key_down)
+ 166   1              {
+ 167   2                      case 12:
+ 168   2                              seg_show_mod++;
+ 169   2                              if(seg_show_mod==3) seg_show_mod=0;
+ 170   2                      break;
+ 171   2                      case 13:
+ 172   2                              work_mod^=1;
+ 173   2                      break;
+ 174   2                      case 16:
+ 175   2                              if(seg_show_mod==2)
+ 176   2                              {
+ 177   3                                      T_compare++;
+ 178   3                              }
+C51 COMPILER V9.59.0.0   MAIN                                                              04/04/2024 14:35:02 PAGE 4   
+
+ 179   2                      break;
+ 180   2                      case 17:
+ 181   2                              if(seg_show_mod==2)
+ 182   2                              {
+ 183   3                                      T_compare--;
+ 184   3                              }
+ 185   2                              if(seg_show_mod==1)
+ 186   2                              {
+ 187   3                                      seg_show_mod=3;
+ 188   3                              }
+ 189   2                      break;
+ 190   2              }
+ 191   1              if(seg_show_mod==3&&key_up==17) seg_show_mod=1;
+ 192   1      }
+ 193          void seg_proc()
+ 194          {
+ 195   1              unsigned char i;
+ 196   1              if(seg_slow_down) return;
+ 197   1              seg_slow_down=1;
+ 198   1              
+ 199   1              T_show=Temperature;
+ 200   1              Rtc_Read(Time);
+ 201   1              h_val=Time[0];
+ 202   1              for(i=0;i<8;i++) 
+ 203   1                      {
+ 204   2                      point_bus[i]=0;
+ 205   2                      seg_bus[i]=10;
+ 206   2                      }
+ 207   1                      switch(seg_show_mod)
+ 208   1              {
+ 209   2                      case 0://温度
+ 210   2                              
+ 211   2                              seg_bus[0]=11;
+ 212   2                              seg_bus[1]=1;
+ 213   2                              seg_bus[5]=(unsigned char)T_show/10%10;
+ 214   2                              seg_bus[6]=(unsigned char)T_show%10;
+ 215   2                              point_bus[6]=1;
+ 216   2                              seg_bus[7]=(unsigned char)(T_show*10)%10;
+ 217   2                      break;
+ 218   2                      case 1://时间
+ 219   2                              seg_bus[0]=11;
+ 220   2                              seg_bus[1]=2;
+ 221   2                              seg_bus[3]=(int)Time[0]/16;
+ 222   2                              seg_bus[4]=(int)Time[0]%16;
+ 223   2                              seg_bus[5]=12;
+ 224   2                              seg_bus[6]=(int)Time[1]/16;
+ 225   2                              seg_bus[7]=(int)Time[1]%16;
+ 226   2                      break;
+ 227   2                      case 2://参数
+ 228   2                              seg_bus[0]=11;
+ 229   2                              seg_bus[1]=3;
+ 230   2                              seg_bus[6]=(unsigned char)T_compare/10%10;
+ 231   2                              seg_bus[7]=(unsigned char)T_compare%10;
+ 232   2                      break;
+ 233   2                      case 3://时间
+ 234   2                              seg_bus[0]=11;
+ 235   2                              seg_bus[1]=2;
+ 236   2                              seg_bus[3]=(int)Time[1]/16;
+ 237   2                              seg_bus[4]=(int)Time[1]%16;
+ 238   2                              seg_bus[5]=12;
+ 239   2                              seg_bus[6]=(int)Time[2]/16;
+ 240   2                              seg_bus[7]=(int)Time[2]%16;
+C51 COMPILER V9.59.0.0   MAIN                                                              04/04/2024 14:35:02 PAGE 5   
+
+ 241   2                      break;
+ 242   2              }
+ 243   1              
+ 244   1      }
+ 245          void T0_R(void) interrupt 1
+ 246          {
+ 247   1              if(++seg_slow_down==50) seg_slow_down=0;
+ 248   1              if(++key_slow_down==100) key_slow_down=0;
+ 249   1              if(++seg_index==8) seg_index=0;
+ 250   1              seg(seg_index,seg_bus[seg_index],point_bus[seg_index]);
+ 251   1              led(seg_index,led_bus[seg_index]);
+ 252   1              seg_proc();
+ 253   1              key_proc();
+ 254   1              if(Time_5s_con==1)
+ 255   1              {
+ 256   2                      led_bus[0]=1;
+ 257   2                      if(work_mod==1) Relay_con=1;
+ 258   2                      if(++Timer_5000==5000)
+ 259   2                      {
+ 260   3                              Timer_5000=0;
+ 261   3                              Time_5s_con=0;
+ 262   3                              if(work_mod==1) Relay_con=0;
+ 263   3                              led_bus[0]=0;
+ 264   3                      }
+ 265   2              }
+ 266   1              if(Time_1ms_con==1)
+ 267   1              {
+ 268   2                      if(++Timer_50==50)
+ 269   2                      {
+ 270   3                              Timer_50=0;
+ 271   3                              led_bus[2]^=1;
+ 272   3                      }
+ 273   2              }
+ 274   1              led_proc();
+ 275   1              Relay(Relay_con);
+ 276   1      }
+ 277          void main()
+ 278          {
+ 279   1              system_init();
+ 280   1              Timer0Init();
+ 281   1              Rtc_Write(Time);
+ 282   1              h_val=Time[3];
+ 283   1              h_old=h_val;
+ 284   1              Relay_con=0;
+ 285   1              while(1)
+ 286   1              {
+ 287   2                      Temperature=T_read();
+ 288   2              }
+ 289   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    980    ----
+   CONSTANT SIZE    =     27    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     51    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      4    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

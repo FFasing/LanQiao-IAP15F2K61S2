@@ -1,0 +1,465 @@
+C51 COMPILER V9.59.0.0   MAIN                                                              04/12/2024 22:38:58 PAGE 1   
+
+
+C51 COMPILER V9.59.0.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: E:\keil5\C51\BIN\C51.EXE main.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\main.l
+                    -st) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <STC15F2K60S2.H>
+   2          #include <intrins.h>
+   3          #include <ds1302.h>
+   4          #include <onewire.h>
+   5          #include <iic.h>
+   6          
+   7          #define uchar unsigned char 
+   8          #define uint unsigned int
+   9          
+  10          sbit ROW1=P3^0;
+  11          sbit ROW2=P3^1;
+  12          sbit ROW3=P3^2;
+  13          sbit ROW4=P3^3;
+  14          sbit COL1=P4^4;
+  15          sbit COL2=P4^2;
+  16          sbit COL3=P3^5;
+  17          sbit COL4=P3^4;
+  18          
+  19          sbit us_tx=P1^0;
+  20          sbit us_rx=P1^1;
+  21          
+  22          code unsigned char Eep_Table[]={0,1,2,3,4,5,6,7,8,9,12,15,11,16,13,17};
+  23          code unsigned char Seg_Table[] =
+  24          {
+  25          0xc0,//0
+  26          0xf9,//1
+  27          0xa4,//2
+  28          0xb0,//3
+  29          0x99,//4
+  30          0x92,//5
+  31          0x82,//6
+  32          0xf8,//7
+  33          0x80,//8
+  34          0x90,//9
+  35          0xff,//10
+  36          0xc6,//C 11
+  37          0x88,//A 12
+  38          0x86,//E 13
+  39          0x8c,//P 14
+  40          0x83,//b 15
+  41          0xa1,//d 16 
+  42          0x8e,//F 17
+  43          0xaf,//r 18
+  44          0x98,//q 19
+  45          0xcf,//l 20
+  46          0xc1,//U 21
+  47          0x92,//S 22
+  48          0xc7//L 23
+  49          };
+  50          code unsigned char Seg_Wale[] = {0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80};
+  51          uchar seg_bus[]={10,10,10,10,10,10,10,10};
+  52          uchar point_bus[]={0,0,0,0,0,0,0,0};
+  53          uchar led_bus[]={0,0,0,0,0,0,0,0};
+  54          uchar seg_slow_down,key_slow_down;
+C51 COMPILER V9.59.0.0   MAIN                                                              04/12/2024 22:38:58 PAGE 2   
+
+  55          uchar seg_index;
+  56          uchar key_val,key_old,key_down,key_up;
+  57          uchar V_RB2,V_RD1;
+  58          uint Timer_100,Timer_1000;
+  59          bit relay_con=0;
+  60          bit beep_con=0;
+  61          uchar distances;
+  62          uchar word_index=0,led_index=0;
+  63          char word_buf[]={0,0,0,0};
+  64          
+  65          uchar seg_show_mod=8;   
+  66          //0-Time(ds1302) 1-temperatur(ds18b20) 2-AD(fcp8591) 3-EEPROM(at24c02) 
+  67          //4-freq                 5-relay                           6-beep                7-ultrasonic      
+  68          //8-led                  9-word
+  69          uchar Time[3]={0x23,0x59,0x50};
+  70          float temperatur;
+  71          uchar eep_save=0;
+  72          uint freq;
+  73          
+  74          
+  75          void system_init()
+  76          {
+  77   1              P2 = P2 & 0x1f | 0x80;
+  78   1              P0 = 0xff;
+  79   1              P2 = P2 & 0x1f | 0xa0;
+  80   1              P0 = 0x00;
+  81   1      }
+  82          void seg(uchar wale,valu,point)
+  83          {
+  84   1              P2 = P2 & 0x1f | 0xc0;
+  85   1              P0 = Seg_Wale[wale];
+  86   1              P2 = P2 & 0x1f | 0xe0;
+  87   1              P0 = Seg_Table[10];
+  88   1              P2 = P2 & 0x1f | 0xc0;
+  89   1              P0 = Seg_Wale[wale];
+  90   1              P2 = P2 & 0x1f | 0xe0;
+  91   1              P0 = Seg_Table[10];
+  92   1              if(point) 
+  93   1                      P0 &= 0x7f;
+  94   1              P0 &= Seg_Table[valu];
+  95   1      }
+  96          uchar key_read()
+  97          {
+  98   1              uchar i=0;
+  99   1              ROW1=ROW2=ROW3=ROW4=1;
+ 100   1              COL1=0;COL2=COL3=COL4=1;
+ 101   1              if(ROW4==0) i=4;
+ 102   1              if(ROW3==0) i=5;
+ 103   1              if(ROW2==0) i=6;
+ 104   1              if(ROW1==0) i=7;
+ 105   1              COL2=0;COL1=COL3=COL4=1;
+ 106   1              if(ROW4==0) i=8;
+ 107   1              if(ROW3==0) i=9;
+ 108   1              if(ROW2==0) i=10;
+ 109   1              if(ROW1==0) i=11;
+ 110   1              COL3=0;COL2=COL1=COL4=1;
+ 111   1              if(ROW4==0) i=12;
+ 112   1              if(ROW3==0) i=13;
+ 113   1              if(ROW2==0) i=14;
+ 114   1              if(ROW1==0) i=15;
+ 115   1              COL4=0;COL2=COL3=COL1=1;
+ 116   1              if(ROW4==0) i=16;
+C51 COMPILER V9.59.0.0   MAIN                                                              04/12/2024 22:38:58 PAGE 3   
+
+ 117   1              if(ROW3==0) i=17;
+ 118   1              if(ROW2==0) i=18;
+ 119   1              if(ROW1==0) i=19;
+ 120   1              return i;
+ 121   1      }
+ 122          void led(uchar addr,enable)
+ 123          {
+ 124   1              uchar val=0x00,old=0xff;
+ 125   1              if(enable)
+ 126   1                      val|=0x01<<addr;
+ 127   1              else
+ 128   1                      val&=~(0x01<<addr);
+ 129   1              if(old!=val)
+ 130   1              {
+ 131   2                      P2 = P2 & 0x1f | 0x80;
+ 132   2                      P0 =~val;
+ 133   2                      old=val;
+ 134   2              }
+ 135   1      }
+ 136          void other(uchar relay,beep)
+ 137          {
+ 138   1              uchar val=0x00,old=0xff;
+ 139   1              if(relay)
+ 140   1                      val|=0x10;
+ 141   1              else
+ 142   1                      val&=~0x10;
+ 143   1              if(beep)
+ 144   1                      val|=0x40;//0100
+ 145   1              else
+ 146   1                      val&=~0x40;
+ 147   1              if(old!=val)
+ 148   1              {
+ 149   2                      P2 = P2 & 0x1f | 0xa0;
+ 150   2                      P0 = val;
+ 151   2                      old=val;
+ 152   2              }
+ 153   1      }
+ 154          void Timer0_Init(void)          //@12.000MHz
+ 155          {
+ 156   1              AUXR &= 0x7F;                   //定时器时钟12T模式
+ 157   1              TMOD &= 0xF0;                   //设置定时器模式
+ 158   1              TMOD |= 0x05;
+ 159   1              TL0 = 0x00;                             //设置定时初始值
+ 160   1              TH0 = 0x00;                             //设置定时初始值
+ 161   1              TF0 = 0;                                //清除TF0标志
+ 162   1              TR0 = 1;                                //定时器0开始计时
+ 163   1              ET0 = 1;
+ 164   1              EA = 1;
+ 165   1      }
+ 166          
+ 167          void Timer1_Init(void)          //1毫秒@12.000MHz
+ 168          {
+ 169   1              AUXR &= 0xBF;                   //定时器时钟12T模式
+ 170   1              TMOD &= 0x0F;                   //设置定时器模式
+ 171   1              TL1 = 0x18;                             //设置定时初始值
+ 172   1              TH1 = 0xFC;                             //设置定时初始值
+ 173   1              TF1 = 0;                                //清除TF1标志
+ 174   1              TR1 = 1;                                //定时器1开始计时
+ 175   1              ET1 = 1;
+ 176   1              EA = 1;
+ 177   1      }
+ 178                  
+C51 COMPILER V9.59.0.0   MAIN                                                              04/12/2024 22:38:58 PAGE 4   
+
+ 179          void Delay20us(void)    //@12.000MHz
+ 180          {
+ 181   1              unsigned char data i;
+ 182   1      
+ 183   1              _nop_();
+ 184   1              _nop_();
+ 185   1              i = 57;
+ 186   1              while (--i);
+ 187   1      }
+ 188          void ul_wave()
+ 189          {
+ 190   1              unsigned char i;
+ 191   1              for(i=0;i<10;i++)
+ 192   1              {
+ 193   2                      us_tx=1;
+ 194   2                      Delay20us();
+ 195   2                      us_tx=0;
+ 196   2                      Delay20us();
+ 197   2              }
+ 198   1      }
+ 199          void ultrasonic(void)
+ 200          {
+ 201   1              TMOD&=0xF0;
+ 202   1              TR0=0;
+ 203   1              TH0=TL0=0;
+ 204   1              ul_wave();
+ 205   1              TR0=1;
+ 206   1              while(us_rx==1&&TF0==0);
+ 207   1              TR0=0;
+ 208   1              if(TF0==1)
+ 209   1              {
+ 210   2                      TF0=0;
+ 211   2                      distances=0;
+ 212   2              }
+ 213   1              else
+ 214   1                      distances=((TH0<<8)|TL0)*0.017;
+ 215   1      }
+ 216          void led_proc()
+ 217          {
+ 218   1              
+ 219   1      }
+ 220          void key_proc()
+ 221          {
+ 222   1              if(key_slow_down) return;
+ 223   1              key_slow_down=1;
+ 224   1              
+ 225   1              key_val=key_read();
+ 226   1              key_down=key_val&(key_val^key_old);
+ 227   1              key_up=~key_val&(key_val^key_old);
+ 228   1              key_old=key_val;
+ 229   1              
+ 230   1              switch(key_down)
+ 231   1              {
+ 232   2                      case 4:
+ 233   2                              seg_show_mod--;
+ 234   2                              if((seg_show_mod==5)||(seg_show_mod==6)) {Timer0_Init();Timer1_Init();}
+ 235   2                      break;
+ 236   2                      case 5:
+ 237   2                              seg_show_mod++;
+ 238   2                              if((seg_show_mod==5)||(seg_show_mod==6)) {Timer0_Init();Timer1_Init();}
+ 239   2                      break;
+ 240   2                      case 8:
+C51 COMPILER V9.59.0.0   MAIN                                                              04/12/2024 22:38:58 PAGE 5   
+
+ 241   2                              if(seg_show_mod==3) 
+ 242   2                              {
+ 243   3                                      eep_save++;
+ 244   3                                      if(eep_save==16) eep_save=0;
+ 245   3                                      EEPROM_Write(&eep_save,20,1);
+ 246   3                              }
+ 247   2                              if(seg_show_mod==5) 
+ 248   2                              {
+ 249   3                                      relay_con^=1;
+ 250   3                              }
+ 251   2                              if(seg_show_mod==6) 
+ 252   2                              {
+ 253   3                                      beep_con^=1;
+ 254   3                              }
+ 255   2                              if(seg_show_mod==7) 
+ 256   2                              {
+ 257   3                                      ultrasonic();
+ 258   3                              }
+ 259   2                              if(seg_show_mod==8) 
+ 260   2                              {
+ 261   3                                      led_index++;
+ 262   3                                      if(led_index==8) led_index=0;
+ 263   3                              }
+ 264   2                              if(seg_show_mod==9) 
+ 265   2                              {
+ 266   3                                      word_index++;
+ 267   3                                      if(word_index==4) word_index=0;
+ 268   3                                      EEPROM_Write(word_buf,1,4);
+ 269   3                              }
+ 270   2                      break;
+ 271   2                      case 9:
+ 272   2                              if(seg_show_mod==8) 
+ 273   2                              {
+ 274   3                                      led_bus[led_index]^=1;
+ 275   3                              }
+ 276   2                      break;
+ 277   2                      case 13:
+ 278   2                              if(seg_show_mod==9) 
+ 279   2                              {
+ 280   3                                      word_buf[word_index]++;
+ 281   3                                      if(word_buf[word_index]==16) word_buf[word_index]=0;
+ 282   3                                      EEPROM_Write(word_buf,1,4);
+ 283   3                              }
+ 284   2                      break;
+ 285   2                      case 12:
+ 286   2                              if(seg_show_mod==9) 
+ 287   2                              {
+ 288   3                                      word_buf[word_index]--;
+ 289   3                                      if(word_buf[word_index]==-1) word_buf[word_index]=15;
+ 290   3                                      EEPROM_Write(word_buf,1,4);
+ 291   3                              }
+ 292   2                      break;
+ 293   2              }
+ 294   1      }
+ 295          void seg_proc()
+ 296          {
+ 297   1              uchar i;
+ 298   1              uint v_rb2,v_rd1;
+ 299   1              if(seg_slow_down) return;
+ 300   1              seg_slow_down=1;
+ 301   1              for(i=0;i<8;i++)
+ 302   1              {
+C51 COMPILER V9.59.0.0   MAIN                                                              04/12/2024 22:38:58 PAGE 6   
+
+ 303   2                      seg_bus[i]=10;
+ 304   2                      point_bus[i]=0;
+ 305   2              }
+ 306   1              switch(seg_show_mod)
+ 307   1              {
+ 308   2                      case 0: 
+ 309   2                              Time_read(Time);
+ 310   2                              seg_bus[0]=Time[0]/16;
+ 311   2                              seg_bus[1]=Time[0]%16;
+ 312   2                              seg_bus[3]=Time[1]/16;
+ 313   2                              seg_bus[4]=Time[1]%16;
+ 314   2                              seg_bus[6]=Time[2]/16;
+ 315   2                              seg_bus[7]=Time[2]%16;
+ 316   2                      break;
+ 317   2                      case 1:
+ 318   2                              seg_bus[0]=11;
+ 319   2                              seg_bus[4]=(int)(temperatur/10.0)%10;
+ 320   2                              seg_bus[5]=(int)(temperatur)%10;
+ 321   2                              point_bus[5]=1;
+ 322   2                              seg_bus[6]=(int)(temperatur*10.0)%10;
+ 323   2                              seg_bus[7]=(int)(temperatur*100.0)%10;
+ 324   2                      break;
+ 325   2                      case 2:
+ 326   2                              v_rb2=(int)V_RB2*10/51*10;
+ 327   2                              v_rd1=(int)V_RD1*10/51*10;
+ 328   2                              seg_bus[0]=12;
+ 329   2                              seg_bus[1]=v_rb2/100%10;
+ 330   2                              point_bus[1]=1;
+ 331   2                              seg_bus[2]=v_rb2/10%10;
+ 332   2                              seg_bus[3]=v_rb2%10;
+ 333   2                              seg_bus[5]=v_rd1/100%10;
+ 334   2                              point_bus[5]=1;
+ 335   2                              seg_bus[6]=v_rd1/10%10;
+ 336   2                              seg_bus[7]=v_rd1%10;
+ 337   2                      break;
+ 338   2                      case 3:
+ 339   2                              seg_bus[0]=13;
+ 340   2                              seg_bus[1]=13;
+ 341   2                              seg_bus[2]=14;
+ 342   2                              seg_bus[7]=Eep_Table[eep_save];
+ 343   2                      break;
+ 344   2                      case 4:
+ 345   2                              seg_bus[0]=Eep_Table[15];//f
+ 346   2                              seg_bus[1]=18;//r
+ 347   2                              seg_bus[2]=Eep_Table[14];//e
+ 348   2                              seg_bus[3]=freq/10000%10;
+ 349   2                              seg_bus[4]=freq/1000%10;
+ 350   2                              seg_bus[5]=freq/100%10;
+ 351   2                              seg_bus[6]=freq/10%10;
+ 352   2                              seg_bus[7]=freq/1%10;
+ 353   2                      break;
+ 354   2                      case 5:
+ 355   2                              seg_bus[0]=18;//r
+ 356   2                              seg_bus[1]=20;
+ 357   2                              seg_bus[2]=Eep_Table[10];//a
+ 358   2                              seg_bus[7]=relay_con;
+ 359   2                      break;
+ 360   2                      case 6:
+ 361   2                              seg_bus[0]=Eep_Table[11];
+ 362   2                              seg_bus[1]=Eep_Table[14];
+ 363   2                              seg_bus[2]=Eep_Table[14];
+ 364   2                              seg_bus[7]=beep_con;
+C51 COMPILER V9.59.0.0   MAIN                                                              04/12/2024 22:38:58 PAGE 7   
+
+ 365   2                      break;
+ 366   2                      case 7:
+ 367   2                              seg_bus[0]=21;
+ 368   2                              seg_bus[1]=22;
+ 369   2                              seg_bus[5]=(int)distances/100%10;
+ 370   2                              seg_bus[6]=(int)distances/10%10;
+ 371   2                              seg_bus[7]=(int)distances/1%10;
+ 372   2                      break;
+ 373   2                      case 8:
+ 374   2                              seg_bus[0]=1;
+ 375   2                              seg_bus[1]=Eep_Table[14];
+ 376   2                              seg_bus[2]=Eep_Table[13];
+ 377   2                              seg_bus[4]=23;
+ 378   2                              seg_bus[5]=led_index+1;
+ 379   2                              seg_bus[7]=led_bus[led_index];
+ 380   2                      break;
+ 381   2                      case 9:
+ 382   2                              seg_bus[0]=word_index+1;
+ 383   2                              seg_bus[2]=word_buf[word_index]/10;
+ 384   2                              seg_bus[3]=word_buf[word_index]%10;
+ 385   2                              seg_bus[4]=Eep_Table[word_buf[0]];
+ 386   2                              seg_bus[5]=Eep_Table[word_buf[1]];
+ 387   2                              seg_bus[6]=Eep_Table[word_buf[2]];
+ 388   2                              seg_bus[7]=Eep_Table[word_buf[3]];
+ 389   2                      break;
+ 390   2              }
+ 391   1      }
+ 392          void timer0_r() interrupt 3
+ 393          {
+ 394   1              if(++seg_slow_down==50) seg_slow_down=0;
+ 395   1              if(++key_slow_down==100) key_slow_down=0;
+ 396   1              if(++seg_index==8) seg_index=0;
+ 397   1              seg(seg_index,seg_bus[seg_index], point_bus[seg_index]);
+ 398   1              led(seg_index,led_bus[seg_index]);
+ 399   1              led_proc();
+ 400   1              key_proc();
+ 401   1              seg_proc();
+ 402   1              if(seg_show_mod!=7)
+ 403   1              {
+ 404   2              if(++Timer_1000==1000)
+ 405   2              {
+ 406   3                      Timer_1000=0;
+ 407   3                      freq=(int)((TH0<<8)|TL0);
+ 408   3                      TH0=TL0=0;
+ 409   3              }
+ 410   2              }
+ 411   1              other(relay_con,beep_con);
+ 412   1      }
+ 413          void main()
+ 414          {
+ 415   1              EEPROM_Read(&eep_save,20,1);
+ 416   1              system_init();
+ 417   1              Timer1_Init();
+ 418   1              EEPROM_Read(word_buf,1,4);
+ 419   1              Timer0_Init();
+ 420   1              Time_write(Time);
+ 421   1              while(1)
+ 422   1              {
+ 423   2                      V_RD1=AD_read(0x43);
+ 424   2                      V_RB2=AD_read(0x41);
+ 425   2                      temperatur=Temperatur_Read();
+ 426   2              }
+C51 COMPILER V9.59.0.0   MAIN                                                              04/12/2024 22:38:58 PAGE 8   
+
+ 427   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1829    ----
+   CONSTANT SIZE    =     48    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     55       2
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      2    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
